@@ -641,18 +641,30 @@ QUALITY_MODES = [(1.0, "native / DLAA"), (1.5, "Quality"), (1.7, "Balanced"), (2
                  (3.0, "Ultra Performance")]
 
 
+def upscale_sizes(rw, rh, ow, oh):
+    ratio = ow / rw if rw else 0
+    mode = min(QUALITY_MODES, key=lambda q: abs(q[0] - ratio))[1] if ratio else "?"
+    return {"render": f"{rw}x{rh}", "output": f"{ow}x{oh}", "ratio": round(ratio, 2), "mode": mode}
+
+
 def last_upscale(lines):
-    """What HelixSR was last asked to do: render -> output size (its 'create:' line), the FSR quality mode that ratio
-    matches, and the network state from its 'summary:' / 'model-e:' lines. None before any upscaler was created."""
+    """What HelixSR was last asked to do: render -> output size, the quality mode that ratio matches, and the network
+    state from its 'summary:' / 'model-e:' lines. None before any upscaler was created.
+    The 'create:' line only has the MAXIMUM render size (OptiScaler and many games create the upscaler with the
+    screen size there, which would read as native); the per-frame size comes from its 'dispatch N: render' lines
+    (NGX route: 'ngx: feature … eval'), the last one logged after that create."""
     out = None
     for line in lines:
-        m = re.search(r"create: max render (\d+)x(\d+) -> upscale (\d+)x(\d+)", line)
+        m = re.search(r"create: max render (\d+)x(\d+) -> upscale (\d+)x(\d+)", line) or \
+            re.search(r"ngx: feature \d+ created: render (\d+)x(\d+) -> output (\d+)x(\d+)", line)
         if m and "dry run" not in line:
-            rw, rh, ow, oh = map(int, m.groups())
-            ratio = ow / rw if rw else 0
-            mode = min(QUALITY_MODES, key=lambda q: abs(q[0] - ratio))[1] if ratio else "?"
-            out = {"render": f"{rw}x{rh}", "output": f"{ow}x{oh}", "ratio": round(ratio, 2), "mode": mode,
-                   "network": None}
+            out = {**upscale_sizes(*map(int, m.groups())), "network": None, "per_frame": False}
+            continue
+        m = re.search(r"dispatch \d+: render (\d+)x(\d+) -> (\d+)x(\d+)", line) or \
+            re.search(r"ngx: feature \d+ eval \d+: render (\d+)x(\d+) -> (\d+)x(\d+)", line)
+        if m and "dry run" not in line:
+            # also without a create line (it can be older than the part of the log that is read)
+            out = {**(out or {"network": None}), **upscale_sizes(*map(int, m.groups())), "per_frame": True}
             continue
         if out is None:
             continue

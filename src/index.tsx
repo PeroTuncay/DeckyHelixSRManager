@@ -84,7 +84,8 @@ type Check = {
   mtime?: number;
   highlights: string[];
   tail: string[];
-  last_upscale?: { render: string; output: string; ratio: number; mode: string; network: string | null } | null;
+  // per_frame: from HelixSR's per-frame lines; otherwise only the maximum render size the upscaler was created with
+  last_upscale?: { render: string; output: string; ratio: number; mode: string; network: string | null; per_frame: boolean } | null;
 };
 
 type IniValues = {
@@ -871,7 +872,7 @@ function CheckBlock({ check, ini, session, details }: { check: Check; ini: IniVa
           {fresh && <div style={{ color: fresh.color }}>{fresh.text}</div>}
           {u && (
             <div>
-              Last upscale: {u.render} → {u.output} ({u.mode}, {u.ratio}x)
+              {u.per_frame ? `Last frame logged: ${u.render} → ${u.output} (${u.mode}, ${u.ratio}x)` : `Created for up to ${u.render} → ${u.output} (no frame logged yet)`}
               {u.network && <div>Network: {u.network}</div>}
             </div>
           )}
@@ -1438,7 +1439,7 @@ function gameStatus(game: GameDetail, active: Active): { color: string; title: s
   }
   if (i.check.status === "running" && fresh !== "stale") {
     const when = fresh === "current" ? "in the current game session" : fresh === "last" ? "in the last game session" : "";
-    return { color: GREEN, title: "✓ Working", detail: `${v} upscaled ${when}${u ? `: ${u.render} → ${u.output} (${u.mode})` : ""}.`, extra };
+    return { color: GREEN, title: "✓ Working", detail: `${v} upscaled ${when}${u?.per_frame ? `: ${u.render} → ${u.output} (${u.mode})` : ""}.`, extra };
   }
   if (i.check.status === "running") {
     return { color: YELLOW, title: "Installed, but not used last time", detail: `${v} worked before, but not in the last game session. In the game, ${pick}.`, extra };
