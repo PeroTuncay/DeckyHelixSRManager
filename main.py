@@ -679,16 +679,29 @@ def last_upscale(lines):
     return out
 
 
-def opti_log_check(opti_dir):
-    ini = opti_dir / "OptiScaler.ini"
+def opti_log_path(opti_dir):
     name = "OptiScaler.log"
     try:
-        v = ini_get(read_text(ini), "Log", "LogFileName")
+        v = ini_get(read_text(opti_dir / "OptiScaler.ini"), "Log", "LogFileName")
         if v and v.lower() != "auto":
             name = v.strip('"')
     except OSError:
         pass
-    log = linux_path(name, opti_dir) or (opti_dir / name)
+    return linux_path(name, opti_dir) or (opti_dir / name)
+
+
+def opti_dxgi_quirk(opti_dir):
+    """OptiScaler turns GPU spoofing off for some games (e.g. The Witcher 3) when Dxgi = auto and says so once, near
+    the start of its log ('Quirk: Dxgi spoofing disabled by default'), which the tail read elsewhere doesn't reach."""
+    try:
+        with open(opti_log_path(opti_dir), "rb") as f:
+            return b"Dxgi spoofing disabled" in f.read(64 * 1024)
+    except OSError:
+        return False
+
+
+def opti_log_check(opti_dir):
+    log = opti_log_path(opti_dir)
     info = file_info(log)
     if not info:
         return {"exists": False, "path": str(log), "lines": [], "not_nvidia": False}
@@ -805,7 +818,7 @@ VK_NAMES = {0x2D: "Insert", 0x24: "Home", 0x23: "End", 0x2E: "Delete", 0x21: "Pa
             0x13: "Pause", 0x91: "Scroll Lock", 0x08: "Backspace", **{0x70 + i: f"F{i + 1}" for i in range(12)}}
 
 
-def opti_hints(text):
+def opti_hints(text, dxgi_quirk=False):
     """OptiScaler settings (the game's OptiScaler.ini) that commonly get in HelixSR's or the Deck's way."""
     get = lambda sec, key: (ini_get(text, sec, key) or "auto").strip().lower()
     hints = []
@@ -814,7 +827,12 @@ def opti_hints(text):
                                                "HelixSR. Set it to auto (OptiScaler.ini, [Inputs])."})
     if get("Spoofing", "Dxgi") == "false":
         hints.append({"level": "warn", "text": "GPU spoofing is off (Dxgi = false): many games hide DLSS on an AMD GPU. "
-                                               "Set it to auto ([Spoofing]) or pick FSR / XeSS in the game."})
+                                               "Set it to auto ([Spoofing]); FSR / XeSS in the game also work, but can shimmer more."})
+    elif get("Spoofing", "Dxgi") == "auto" and dxgi_quirk:
+        hints.append({"level": "warn", "text": "OptiScaler turns GPU spoofing off for this game (its own quirk, see "
+                                               "OptiScaler.log), so the game may hide DLSS on the Deck. To try DLSS, set "
+                                               "Dxgi = true ([Spoofing]); set it back to auto if the game misbehaves. "
+                                               "FSR / XeSS in the game also work, but can shimmer more."})
     overlays = get("Hotfix", "DisableOverlays")
     optifg = get("FrameGen", "Enabled") == "true" and get("FrameGen", "FGInput") == "upscaler"
     if overlays == "true" or (overlays == "auto" and optifg):
@@ -883,7 +901,7 @@ def opti_state(opti_dir, game_folder):
         "log_to_file": (ini_get(text, "Log", "LogToFile") or "auto").lower() == "true",
         "disabled": installed_kind(opti_dir) in ("ffx", "ngx") and bool((install_marker(opti_dir) or {}).get("disabled")),
         "official_route": (official_marker_data(opti_dir) or {}).get("route"),
-        "hints": opti_hints(text),
+        "hints": opti_hints(text, opti_dxgi_quirk(opti_dir)),
     }
 
 

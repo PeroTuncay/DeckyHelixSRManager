@@ -87,9 +87,10 @@ your account banned and only installs after you turn on **I understand the risk*
 
 - **Game with OptiScaler (HelixSR 1.7, 1.8 or 1.4):** in the **OptiScaler** section press **Install HelixSR …
   via OptiScaler**. Leave **Keep current FSR selectable** on to keep your FSR 4 available for comparison. In the game,
-  select DLSS (or FSR / XeSS in games without DLSS), then open OptiScaler's menu and pick **FSR HelixSR (3.1.5)** under
-  Upscalers → FFX Upscaler. OptiScaler's menu opens with Insert by default, which the Deck doesn't have: map it to a
-  back button in the game's controller layout (the plugin shows the key the game's `OptiScaler.ini` uses).
+  select DLSS: it gives HelixSR the best input. XeSS or FSR also work in games without DLSS, but can shimmer more. Then
+  open OptiScaler's menu and pick **FSR HelixSR (3.1.5)** under Upscalers → FFX Upscaler. OptiScaler's menu opens with
+  Insert by default, which the Deck doesn't have: map it to a back button in the game's controller layout (the plugin
+  shows the key the game's `OptiScaler.ini` uses).
   `Dx12Upscaler` is set to what the game's OptiScaler expects (`fsr31` on OptiScaler 0.9.4).
 - **Game that ships FSR 3.1 itself (HelixSR 1.4, 1.7 or 1.8):** in **In place of the game's FSR 3.1** press **Install
   HelixSR … here**, then select AMD FSR as the upscaler in the game's settings. This needs no OptiScaler. A game that

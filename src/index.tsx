@@ -1246,7 +1246,7 @@ function OptiItem({
               : `Uses HelixSR ${o.helix_version ?? ""}${o.kept_fsr4 ? " (FSR 4 selectable next to it)" : ""}`
             : installed
               ? "HelixSR folder present, but OptiScaler.ini no longer points to it (OptiScaler reinstalled?)"
-              : "OptiScaler found. Installing HelixSR here means: select DLSS in the game (XeSS or FSR if DLSS isn't offered)."}
+              : "OptiScaler found. Installing HelixSR here means: select DLSS in the game, which gives HelixSR the best input. XeSS or FSR also work if DLSS isn't offered, but can shimmer more."}
         </div>
         {details && !o.configured && !installed && (
           <div>
@@ -1396,7 +1396,7 @@ function freshness(check: Check, session: Session): "current" | "last" | "stale"
 
 const SELECT_TEXT: Record<Install["how"], string> = {
   direct: "select AMD FSR as the upscaler in the game",
-  opti: "select DLSS as the upscaler in the game (XeSS or FSR if the game doesn't offer DLSS)",
+  opti: "select DLSS as the upscaler in the game: it gives HelixSR the best input (XeSS or FSR also work if the game doesn't offer DLSS, but can shimmer more)",
   dlss: "select DLSS as the upscaler in the game",
 };
 
