@@ -125,6 +125,7 @@ type OptiTarget = {
   kept_fsr4: boolean;
   log_to_file: boolean;
   disabled: boolean; // HelixSR's files stay, OptiScaler uses its previous upscaler
+  official_route: "optiscaler" | "dlss" | null; // how HelixSR's own setup installed it
   hints: { level: "warn" | "info"; text: string }[]; // OptiScaler settings worth knowing about
   check: Check;
   opti_log: { exists: boolean; path: string; mtime?: number; lines: string[]; not_nvidia: boolean };
@@ -176,6 +177,8 @@ type GameDetail = Result & {
   anticheat: string[]; // anti-cheat files found in the game folder
   anticheat_ack: boolean;
   session: Session;
+  // installs of HelixSR 1.8.1+'s experimental DLSS route made by its own setup (shown, not managed)
+  official_dlss: { dir: string; rel: string; helix_version: string | null; check: Check }[];
 };
 
 // the current (running) or last game session, to tell whether a helixsr.log belongs to it
@@ -1112,7 +1115,9 @@ function OptiItem({
         <div style={{ fontWeight: 600 }}>{o.rel === "." ? "Game folder" : o.rel}</div>
         <div>
           {official
-            ? `HelixSR ${o.helix_version ?? ""} installed by HelixSR's own setup, together with its own OptiScaler`
+            ? o.official_route === "dlss"
+              ? `HelixSR ${o.helix_version ?? ""} installed by HelixSR's own setup as the game's DLSS (experimental route, without OptiScaler)`
+              : `HelixSR ${o.helix_version ?? ""} installed by HelixSR's own setup, together with its own OptiScaler`
             : o.disabled
             ? `HelixSR ${o.helix_version ?? ""} disabled: OptiScaler uses its previous upscaler`
             : o.configured
@@ -1324,6 +1329,23 @@ function GameSection({ appid, active }: { appid: string; active: Active }) {
             No FSR 3.1 DLL (amd_fidelityfx_upscaler_dx12.dll / amd_fidelityfx_dx12.dll) and no OptiScaler.ini found in
             this game. Install OptiScaler for it first to use HelixSR in DLSS/XeSS/FSR 2 games (DirectX 12 only).
           </Note>
+        </PanelSection>
+      )}
+      {game.official_dlss.length > 0 && (
+        <PanelSection title="Installed by HelixSR's setup">
+          {game.official_dlss.map((d) => (
+            <div key={d.dir}>
+              <Note>
+                <div style={{ fontWeight: 600 }}>{d.rel === "." ? "Game folder" : d.rel}</div>
+                <div>
+                  HelixSR {d.helix_version ?? ""} as the game's DLSS (HelixSR's experimental route, without OptiScaler):
+                  select DLSS in the game. The plugin leaves it to HelixSR's setup; to remove it, run helixsr-setup.sh
+                  in Desktop Mode and answer r for this game. Don't use it in online games (ban risk).
+                </div>
+              </Note>
+              <CheckBlock check={d.check} ini={{ exists: false, network_resolution: "auto", sharpening: "off", upscaler_dll: "", model_e_enabled: true, network_resolutions: [], sharpener: "off", sharpness: "0.5" }} session={game.session} />
+            </div>
+          ))}
         </PanelSection>
       )}
       <DirectSection items={game.direct} active={active} guard={guard} session={game.session} reload={reload} />

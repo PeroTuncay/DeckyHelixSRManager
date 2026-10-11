@@ -29,7 +29,7 @@ Tested on a Steam Deck OLED with The Witcher 3 (DirectX 12) through OptiScaler.
 - **Settings per game** where the release supports them (sharpening in 1.8, network resolution up to 1.4).
 - **Clean up:** remove every downloaded release and the setup's downloads in one go.
 
-> **HelixSR has changed its approach a few times.** Up to 1.4 and again **from 1.7** (tested up to 1.8), it replaces
+> **HelixSR has changed its approach a few times.** Up to 1.4 and again **from 1.7** (tested up to 1.8.1), it replaces
 > FSR 3.1 (`amd_fidelityfx_dx12.dll`): through OptiScaler for DLSS games (select DLSS in the game), or in place of a
 > game's own FSR 3.1. 1.5 and 1.6 instead replaced DLSS (`nvngx.dll`) through OptiScaler and needed a Steam launch
 > option; those releases were withdrawn upstream, but the plugin still supports a 1.5 you already downloaded.
@@ -37,7 +37,9 @@ Tested on a Steam Deck OLED with The Witcher 3 (DirectX 12) through OptiScaler.
 > From 1.7, HelixSR's own setup also installs its own OptiScaler into your games when run in a terminal. The plugin
 > runs only the build part of that setup, so HelixSR's own game installer never starts; it then installs per game
 > itself, into the OptiScaler the game already has. Games already set up by HelixSR's own setup are shown, but left to
-> that setup. A setup whose layout the plugin doesn't recognize isn't run.
+> that setup, including 1.8.1's experimental "DLSS without OptiScaler" route (HelixSR's loader as `dxgi.dll` and
+> HelixSR as `nvngx.dll` next to the game's exe), which the plugin doesn't offer itself. A setup whose layout the plugin
+> doesn't recognize isn't run.
 
 ## Installation
 

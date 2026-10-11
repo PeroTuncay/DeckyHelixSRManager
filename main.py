@@ -364,9 +364,10 @@ def inside_library(p):
     return any(rp.startswith(r + os.sep) for r in game_roots())
 
 
-def scan_folder(folder, anticheat=None):
+def scan_folder(folder, anticheat=None, dlss_installs=None):
     """FSR DLLs and OptiScaler.ini folders under a game folder. Our own HelixSR folders for OptiScaler are skipped.
-    With a list for anticheat, the paths of anti-cheat files/folders found on the way are added to it."""
+    With a list for anticheat, the paths of anti-cheat files/folders found on the way are added to it; with a list for
+    dlss_installs, folders where HelixSR's own setup installed its experimental DLSS route (1.8.1+)."""
     dlls, opti = [], []
 
     def walk(d, depth):
@@ -379,6 +380,9 @@ def scan_folder(folder, anticheat=None):
             return
         if "optiscaler.ini" in names:
             opti.append(Path(d))
+        if dlss_installs is not None and "nvngx.dll" in names and \
+                (read_json(Path(d) / OPTI_SUBDIR / NGX_MARKER) or {}).get("route") == "dlss":
+            dlss_installs.append(Path(d))
         for e in entries:
             low = e.name.lower()
             if anticheat is not None and len(anticheat) < 5 and any(a in low for a in ANTICHEAT):
@@ -769,7 +773,8 @@ def official_marker_data(opti_dir):
     """An install by HelixSR 1.7+'s own setup (its OptiScaler, fakenvapi, helixsr.dll / helixsr_upscaler.dll), or None.
     The plugin shows it but leaves managing it to that setup, which also put its own OptiScaler into the game."""
     data = read_json(Path(opti_dir) / OPTI_SUBDIR / NGX_MARKER)
-    return data if isinstance(data, dict) and data.get("route") == "optiscaler" and "previous" not in data else None
+    return data if isinstance(data, dict) and data.get("route") in ("optiscaler", "dlss") and "previous" not in data \
+        else None
 
 
 def installed_kind(opti_dir):
@@ -839,7 +844,7 @@ def opti_state(opti_dir, game_folder):
     nvngx = ini_get(text, "Libraries", "NvngxPath") or "auto"
     if kind == "official":
         configured = True
-        helix_files = sub / "helixsr.dll"
+        helix_files = sub / "helixsr.dll" if (sub / "helixsr.dll").exists() else opti_dir / DLL_NGX
     if kind == "ngx":
         nv_path = linux_path(nvngx, opti_dir)
         configured = nv_path is not None and os.path.realpath(nv_path) == os.path.realpath(sub / DLL_NGX) and \
@@ -864,6 +869,7 @@ def opti_state(opti_dir, game_folder):
         "kept_fsr4": (sub / FSR4_COPY_NAME).exists(),
         "log_to_file": (ini_get(text, "Log", "LogToFile") or "auto").lower() == "true",
         "disabled": installed_kind(opti_dir) in ("ffx", "ngx") and bool((install_marker(opti_dir) or {}).get("disabled")),
+        "official_route": (official_marker_data(opti_dir) or {}).get("route"),
         "hints": opti_hints(text),
     }
 
@@ -1019,9 +1025,10 @@ def install_optiscaler(opti_dir, dll, ini_src, keep_fsr4):
 def refuse_official(opti_dir):
     data = official_marker_data(opti_dir)
     if data is not None:
-        raise RuntimeError(f"HelixSR {data.get('helixsr', '')} was installed here by HelixSR's own setup, together with "
-                           f"its own OptiScaler. Remove it with that setup first (run helixsr-setup.sh in Desktop Mode "
-                           f"and answer r for this game).")
+        how = "as the game's DLSS (its experimental route)" if data.get("route") == "dlss" else \
+            "together with its own OptiScaler"
+        raise RuntimeError(f"HelixSR {data.get('helixsr', '')} was installed here by HelixSR's own setup, {how}. Remove "
+                           f"it with that setup first (run helixsr-setup.sh in Desktop Mode and answer r for this game).")
 
 
 def install_optiscaler_ngx(opti_dir, dll):
@@ -1674,10 +1681,11 @@ class Plugin:
         def work():
             out = []
             for g in installed_games().values():
-                dlls, opti = scan_folder(g["path"])
+                dlss_dirs = []
+                dlls, opti = scan_folder(g["path"], None, dlss_dirs)
                 targets = direct_targets(dlls)
                 installed = any(is_helixsr(t) and original_of(t).exists() for t in targets) or \
-                    any(installed_kind(o) is not None for o in opti)
+                    any(installed_kind(o) is not None for o in opti) or bool(dlss_dirs)
                 out.append({**g, "fsr": bool(targets), "optiscaler": bool(opti), "helixsr": installed})
             out.sort(key=lambda x: x["name"].lower())
             return out
@@ -1696,8 +1704,8 @@ class Plugin:
             def work():
                 g = self._game(appid)
                 folder = Path(g["path"])
-                anticheat = []
-                dlls, opti = scan_folder(folder, anticheat)
+                anticheat, dlss_dirs = [], []
+                dlls, opti = scan_folder(folder, anticheat, dlss_dirs)
                 direct = []
                 for t in direct_targets(dlls):
                     orig = original_of(t)
@@ -1724,7 +1732,10 @@ class Plugin:
                 acks = load_settings().get("anticheat_ack", {})
                 procs = game_processes(folder, g["appid"])
                 starts = [p["started"] for p in procs if p["started"]]
-                return {"ok": True, **g, "direct": direct, "optiscaler": optis,
+                official_dlss = [{"dir": str(d), "rel": os.path.relpath(d, folder),
+                                  "helix_version": helix_version(d / DLL_NGX), "check": helix_log_check(d)}
+                                 for d in dlss_dirs if d not in opti]   # with OptiScaler.ini there: shown in its section
+                return {"ok": True, **g, "direct": direct, "optiscaler": optis, "official_dlss": official_dlss,
                         "running": [p["name"] for p in procs], "steam_busy": steam_busy(g),
                         # when the current (running) or last game session started, to judge how fresh a log is
                         "session": {"running": bool(procs), "started": min(starts) if starts else None,
