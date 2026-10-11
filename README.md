@@ -55,9 +55,11 @@ Updating works the same way: install the newer zip over the old one.
 ### 2. Download and build HelixSR (once per release)
 
 1. Under **HelixSR**, pick a release in **Release to install** (the newest is marked *latest*).
-2. Press **Download**.
-3. Press **Run setup (build network)** and confirm. The setup downloads NVIDIA's DLSS 310.7.0 DLL, a portable Python
-   with numpy and Microsoft's shader compiler, builds HelixSR's network into the DLL and deletes NVIDIA's DLL again.
+2. Press **Download**. The zip is checked against GitHub's SHA256 checksum before it's used.
+3. Press **Run setup (build network)** and confirm. HelixSR's setup downloads NVIDIA's DLSS 310.7.0 DLL, a portable
+   Python with numpy and Microsoft's shader compiler, builds HelixSR's network (into HelixSR's DLL from 1.8, as two
+   separate files before) and deletes NVIDIA's DLL again. From 1.7 on, only the build part of HelixSR's setup runs:
+   its own game installer never starts, and the plugin installs per game in the next step.
 4. Wait for it to finish: **about 7-10 minutes on a Steam Deck OLED** (the first run includes the one-time downloads;
    later releases reuse Python and the compiler). Keep the Deck plugged in and don't let it sleep, since sleep pauses
    the setup. You can close the menu meanwhile; the progress bar picks up where it is when you reopen it.
@@ -65,46 +67,51 @@ Updating works the same way: install the newer zip over the old one.
 
 ### 3. Install HelixSR into a game
 
-Close the game first, then pick it under **Game** (the list shows games with an FSR 3.1 DLL or OptiScaler; turn off the
-filter to see all).
+Pick the game under **Game** (the list shows games with an FSR 3.1 DLL or OptiScaler; turn off the filter to see all).
+Close the game first: the plugin refuses to change its files while it runs or while Steam is still installing or
+updating it. If the game ships anti-cheat (EasyAntiCheat, BattlEye, …), the plugin warns that online play could get
+your account banned and only installs after you turn on **I understand the risk** for that game.
 
-- **HelixSR 1.5+ (game with OptiScaler 0.9.4):** in the **OptiScaler** section press **Use HelixSR in OptiScaler
-  (as DLSS)**. This puts `nvngx.dll` into a `HelixSR` folder next to `OptiScaler.ini` and sets `Dx12Upscaler = dlss`
-  and `NvngxPath` there (same files and marker as HelixSR's own `helixsr-install.sh`, so either tool can undo the
-  other). Then press **Add launch option**: it adds `PROTON_FORCE_NVAPI=1 DXVK_NVAPI_GPU_ARCH=AD100` in front of the
-  game's existing launch options (e.g. Decky Framegen's stay as they are). In the game, select **DLSS**. Your FSR setup
-  stays selectable in OptiScaler's menu for comparison.
-- **HelixSR 1.7 or 1.4 (game with OptiScaler):** in the **OptiScaler** section press **Use HelixSR in OptiScaler**.
-  Leave **Keep current FSR selectable** on to keep your FSR 4 available for comparison. In the game, select DLSS (or
-  FSR in games without DLSS), then open OptiScaler's menu and pick **FSR HelixSR (3.1.5)** under Upscalers → FFX
-  Upscaler. `Dx12Upscaler` is set to what the game's OptiScaler expects (`fsr31` on OptiScaler 0.9.4).
-- **Game that ships FSR 3.1 itself (HelixSR 1.7 or 1.4)**: in **Replace the game's FSR 3.1** press **Install
-  HelixSR here**, then select AMD FSR as the upscaler in the game's settings.
+- **Game with OptiScaler (HelixSR 1.7, 1.8 or 1.4):** in the **OptiScaler** section press **Use HelixSR in
+  OptiScaler**. Leave **Keep current FSR selectable** on to keep your FSR 4 available for comparison. In the game,
+  select DLSS (or FSR / XeSS in games without DLSS), then open OptiScaler's menu and pick **FSR HelixSR (3.1.5)** under
+  Upscalers → FFX Upscaler. OptiScaler's menu opens with Insert by default, which the Deck doesn't have: map it to a
+  back button in the game's controller layout (the plugin shows the key the game's `OptiScaler.ini` uses).
+  `Dx12Upscaler` is set to what the game's OptiScaler expects (`fsr31` on OptiScaler 0.9.4).
+- **Game that ships FSR 3.1 itself (HelixSR 1.4, 1.7 or 1.8):** in **Replace the game's FSR 3.1** press **Install
+  HelixSR here**, then select AMD FSR as the upscaler in the game's settings. This needs no OptiScaler. A game that
+  offers both sections works either way (HelixSR 1.8's own setup prefers this one).
+- **HelixSR 1.5.x (withdrawn upstream; only if you still have it):** in the **OptiScaler** section press **Use HelixSR
+  in OptiScaler (as DLSS)**, then **Add launch option**: it adds `PROTON_FORCE_NVAPI=1 DXVK_NVAPI_GPU_ARCH=AD100` in
+  front of the game's existing launch options (e.g. Decky Framegen's stay as they are). In the game, select **DLSS**.
 
-Switching a game between releases is one button; the plugin undoes the other setup first. If OptiScaler
-logs "Not running on Nvidia, disabling DLSS", the plugin points out that the launch option wasn't active.
+Switching a game between releases is one button; the plugin undoes the other setup first. Under the OptiScaler section
+the plugin also points out settings that commonly get in the way (DLSS input off, GPU spoofing off, an overlay setting
+that blocks Steam Input).
 
 ### 4. Check that it runs
 
 After playing for a moment, press **Check again** in the plugin. Green **HelixSR network running** means it works. A
 red frame around the picture, or a red status, means the network isn't running; the plugin shows what HelixSR logged.
-
-The check also shows what HelixSR last upscaled, e.g. "853x533 → 1280x800 (Quality, 1.5x), Network: Model E main".
+The check also says whether the log is from the current or last game session (an older log means HelixSR wasn't used
+then) and what HelixSR last upscaled, e.g. "853x533 → 1280x800 (Quality, 1.5x), Network: Model E main".
 
 **To prove HelixSR (and not FSR) is doing the upscaling**, turn off **DLSS network (Model E)** for that game and
 restart it. HelixSR then falls back to a simple, blurry placeholder upscale: if the picture changes, HelixSR is the
 active upscaler; if it looks the same, a different upscaler is selected. Turn the network back on afterwards. The switch
-only takes effect when the game starts. For a live side-by-side comparison, switch between "FSR HelixSR (3.1.5)" and
-FSR 3.1.5 / FSR 4 in OptiScaler's menu (Upscalers → FFX Upscaler); an entry named just "FSR 3.1.5" is AMD's FSR 3.1,
-not HelixSR.
+only takes effect when the game starts (from 1.5 on it's undocumented upstream, so treat it as experimental). For a
+live side-by-side comparison, switch between "FSR HelixSR (3.1.5)" and FSR 3.1.5 / FSR 4 in OptiScaler's menu
+(Upscalers → FFX Upscaler); an entry named just "FSR 3.1.5" is AMD's FSR 3.1, not HelixSR.
 
-From HelixSR 1.5 on the network switch is experimental: these releases don't document it, but their DLLs still
-contain it. Sharpening: up to 1.4 the release's `[Sharpening] Mode`; 1.5-1.7 none; from 1.8 optional sharpening, off by
-default as DLSS: **Sharpening** (NVIDIA's Image Sharpening or AMD's RCAS) and **Sharpness** (0.5 = NVIDIA's default),
-written to the game's `helixsr.ini`. A `helixsr.ini` that holds nothing but default values is removed again.
+### 5. Settings, disable and undo
 
-To undo: **Revert OptiScaler to previous upscaler** (plus **Remove HelixSR launch option** for 1.5+) or **Restore the
-game's FSR**.
+- **Sharpening:** from 1.8, optional and off by default, as DLSS: **Sharpening** (NVIDIA's Image Sharpening or AMD's
+  RCAS) and **Sharpness** (0.5 = NVIDIA's default). Up to 1.4: the release's sharpening mode and network resolution.
+  Changes take effect after restarting the game.
+- **Disable** switches the game back to its own FSR (or OptiScaler's previous upscaler) and keeps HelixSR's files;
+  **Enable HelixSR again** switches back without downloading or building anything.
+- **Undo completely:** **Revert OptiScaler to previous upscaler** or **Restore the game's FSR** (plus **Remove HelixSR
+  launch option** for 1.5.x). The game's original files and settings come back as they were.
 
 ## What it does
 
