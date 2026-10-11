@@ -50,6 +50,12 @@ DLL_FFX = "amd_fidelityfx_dx12.dll"   # HelixSR up to 1.4: an FSR 3.1 replacemen
 DLL_NGX = "nvngx.dll"                 # HelixSR 1.5+: a DLSS (NGX) replacement, OptiScaler only
 NGX_MARKER = "helixsr-install.json"   # in the HelixSR folder next to OptiScaler.ini: {"helixsr", "previous"}
 NGX_LAUNCH_VARS = "PROTON_FORCE_NVAPI=1 DXVK_NVAPI_GPU_ARCH=AD100"
+# file or folder names that mean a game ships kernel/online anti-cheat: swapping its DLLs can get an account banned
+ANTICHEAT = ("easyanticheat", "battleye", "beclient", "equ8", "faceit", "vanguard", "start_protected_game",
+             "anticheatexpert", "xigncode", "nprotect", "gameguard")
+GAMES_MARKER = "# --- games ---"       # helixsr-setup.sh 1.7+: everything after it is HelixSR's own game installer
+BUILD_SCRIPT = ".helixsr-manager-build.sh"
+DOWNLOAD_META = ".helixsr-manager-download.json"
 OPTI_SUBDIR = "HelixSR"
 FSR4_COPY_NAME = "amd_fidelityfx_upscaler_dx12.amd.dll"
 EMBED_MAGIC = b"HXSRNET1"
@@ -122,11 +128,18 @@ def local_versions():
         candidates += [(d.name, d) for d in base_dir().iterdir() if d.is_dir() and valid_tag(d.name)]
     except OSError:
         pass
+    upstream = {r["tag"]: r for r in cached_releases()}
     for tag, d in candidates:
         dll = release_dll(d)
         if dll:
-            out.append({"tag": tag, "dir": str(d), "version": helix_version(dll), "kind": dll_kind(dll),
-                        "built": has_network(dll), "setup_script": (d / "helixsr-setup.sh").exists()})
+            meta = read_json(d / DOWNLOAD_META) or {}
+            now = upstream.get(tag, {}).get("sha256")
+            version = helix_version(dll) or (tag.lstrip("v") if tag != LEGACY_TAG else None)   # 1.2.0 has none inside
+            out.append({"tag": tag, "dir": str(d), "version": version, "kind": dll_kind(dll),
+                        "built": has_network(dll), "setup_script": (d / "helixsr-setup.sh").exists(),
+                        "verified": bool(meta.get("verified")),
+                        # the zip on GitHub is no longer the one downloaded (re-uploaded under the same version)
+                        "replaced_upstream": bool(now and meta.get("sha256") and now != meta["sha256"])})
     out.sort(key=lambda v: version_key(v["version"] or v["tag"]), reverse=True)
     return out
 
@@ -172,9 +185,10 @@ def clean_env():
 
 
 def is_helixsr(path):
+    # "HelixSR 1.4.1" from 1.3 on; 1.2.0 only names itself "HelixSR (3.1.5)" (its FSR interface version)
     try:
         with open(path, "rb") as f:
-            return re.search(rb"HelixSR \d+\.\d+\.\d+", f.read(4 << 20)) is not None
+            return re.search(rb"HelixSR (\d+\.\d+\.\d+|\(3\.1\.\d+\))", f.read(4 << 20)) is not None
     except OSError:
         return False
 
@@ -335,7 +349,9 @@ def installed_games():
                 continue
             folder = sa / "common" / installdir
             if folder.is_dir():
-                games[appid] = {"appid": appid, "name": name, "path": str(folder)}
+                state = acf_field(text, "StateFlags")
+                games[appid] = {"appid": appid, "name": name, "path": str(folder), "steamapps": str(sa),
+                                "state": int(state) if state and state.isdigit() else None}
     return games
 
 
@@ -348,8 +364,9 @@ def inside_library(p):
     return any(rp.startswith(r + os.sep) for r in game_roots())
 
 
-def scan_folder(folder):
-    """FSR DLLs and OptiScaler.ini folders under a game folder. Our own HelixSR folders for OptiScaler are skipped."""
+def scan_folder(folder, anticheat=None):
+    """FSR DLLs and OptiScaler.ini folders under a game folder. Our own HelixSR folders for OptiScaler are skipped.
+    With a list for anticheat, the paths of anti-cheat files/folders found on the way are added to it."""
     dlls, opti = [], []
 
     def walk(d, depth):
@@ -363,14 +380,104 @@ def scan_folder(folder):
         if "optiscaler.ini" in names:
             opti.append(Path(d))
         for e in entries:
+            low = e.name.lower()
+            if anticheat is not None and len(anticheat) < 5 and any(a in low for a in ANTICHEAT):
+                anticheat.append(os.path.relpath(e.path, folder))
             if e.is_dir(follow_symlinks=False):
                 if depth > 0:
                     walk(e.path, depth - 1)
-            elif e.name.lower() in NAMES:
+            elif low in NAMES:
                 dlls.append(Path(e.path))
 
     walk(folder, SCAN_DEPTH)
     return dlls, opti
+
+
+def game_processes(folder, appid, proc="/proc"):
+    """Processes of a running game: Steam starts a game's whole process chain with SteamAppId (SteamGameId) set; a
+    Windows program working inside the game folder counts too. Only processes of this user (the game's)."""
+    out = []
+    root = os.path.realpath(folder)
+    try:
+        pids = [p for p in os.listdir(proc) if p.isdigit()]
+        uid = os.getuid()
+    except (OSError, AttributeError):
+        return out
+    for pid in pids:
+        p = os.path.join(proc, pid)
+        try:
+            if os.stat(p).st_uid != uid:
+                continue
+            with open(os.path.join(p, "environ"), "rb") as f:
+                env = f.read()
+            sid = ""
+            for item in env.split(b"\0"):
+                if item.startswith((b"SteamAppId=", b"SteamGameId=")):
+                    sid = item.split(b"=", 1)[1].decode(errors="replace")
+                    break
+            if sid.isdigit() and int(sid) > 0xffffffff:   # a 64-bit game id carries the app id in its upper half
+                sid = str(int(sid) >> 32)
+            with open(os.path.join(p, "cmdline"), "rb") as f:
+                cmd = f.read().replace(b"\0", b" ").decode(errors="replace").strip()
+            try:
+                cwd = os.path.realpath(os.path.join(p, "cwd"))
+            except OSError:
+                cwd = ""
+            inside = cwd == root or cwd.startswith(root + os.sep) or (root + os.sep) in cmd
+            if (appid and sid == str(appid)) or (inside and ".exe" in cmd.lower()):
+                name = os.path.basename(cmd.split(" ")[0]) if cmd else pid
+                out.append({"name": f"{name} (pid {pid})", "started": process_started(p)})
+        except (OSError, ValueError):
+            continue
+    return out
+
+
+def process_started(p):
+    """Unix time a /proc/<pid> process started, or None."""
+    try:
+        with open(os.path.join(p, "stat")) as f:
+            fields = f.read().rsplit(")", 1)[1].split()
+        with open("/proc/uptime") as f:
+            uptime = float(f.read().split()[0])
+        return time.time() - uptime + int(fields[19]) / os.sysconf("SC_CLK_TCK")
+    except (OSError, ValueError, IndexError, AttributeError):
+        return None
+
+
+def last_played(appid):
+    """When Steam last started this game (localconfig.vdf, LastPlayed), or None."""
+    best, seen = None, set()
+    for root in steam_roots():
+        try:
+            key = root.resolve()
+        except OSError:
+            continue
+        if key in seen:
+            continue
+        seen.add(key)
+        for cfg in root.glob("userdata/*/config/localconfig.vdf"):
+            try:
+                text = cfg.read_text(errors="replace")
+            except OSError:
+                continue
+            for m in re.finditer(r'"%s"\s*\{([^{}]*)' % re.escape(str(appid)), text):
+                n = re.search(r'"LastPlayed"\s*"(\d+)"', m.group(1))
+                if n:
+                    best = max(best or 0, int(n.group(1)))
+    return best
+
+
+def steam_busy(game):
+    """Why Steam may still be writing this game's files, or None (StateFlags 4 = fully installed)."""
+    if game.get("state") not in (None, 4):
+        return "Steam is still installing or updating this game. Wait until it's done."
+    dl = Path(game.get("steamapps") or "") / "downloading" / str(game.get("appid"))
+    try:
+        if game.get("steamapps") and dl.is_dir() and any(dl.iterdir()):
+            return "Steam has a download for this game in progress. Wait until it's done."
+    except OSError:
+        pass
+    return None
 
 
 def direct_targets(dlls):
@@ -444,9 +551,13 @@ def fetch_releases():
         asset = next((a for a in r.get("assets", []) if a["name"].lower().endswith(".zip")), None)
         if r.get("draft") or not asset or not valid_tag(r.get("tag_name")):
             continue
+        digest = asset.get("digest") or ""
         out.append({"tag": r["tag_name"], "name": asset["name"], "url": asset["browser_download_url"],
                     "size": asset.get("size"), "published_at": r.get("published_at"),
-                    "prerelease": bool(r.get("prerelease"))})
+                    "prerelease": bool(r.get("prerelease")),
+                    # GitHub's SHA256 of the file; it changes when the author replaces the zip under the same tag
+                    "sha256": digest[7:].lower() if re.fullmatch(r"sha256:[0-9a-fA-F]{64}", digest) else None,
+                    "asset_updated": asset.get("updated_at")})
     out.sort(key=lambda r: r["published_at"] or "", reverse=True)
     RELEASES_CACHE.parent.mkdir(parents=True, exist_ok=True)
     RELEASES_CACHE.write_text(json.dumps(out, indent=1))
@@ -672,6 +783,44 @@ def installed_kind(opti_dir):
     return None
 
 
+VK_NAMES = {0x2D: "Insert", 0x24: "Home", 0x23: "End", 0x2E: "Delete", 0x21: "Page Up", 0x22: "Page Down",
+            0x13: "Pause", 0x91: "Scroll Lock", 0x08: "Backspace", **{0x70 + i: f"F{i + 1}" for i in range(12)}}
+
+
+def opti_hints(text):
+    """OptiScaler settings (the game's OptiScaler.ini) that commonly get in HelixSR's or the Deck's way."""
+    get = lambda sec, key: (ini_get(text, sec, key) or "auto").strip().lower()
+    hints = []
+    if get("Inputs", "EnableDlssInputs") == "false":
+        hints.append({"level": "warn", "text": "EnableDlssInputs = false: selecting DLSS in the game doesn't reach "
+                                               "HelixSR. Set it to auto (OptiScaler.ini, [Inputs])."})
+    if get("Spoofing", "Dxgi") == "false":
+        hints.append({"level": "warn", "text": "GPU spoofing is off (Dxgi = false): many games hide DLSS on an AMD GPU. "
+                                               "Set it to auto ([Spoofing]) or pick FSR / XeSS in the game."})
+    overlays = get("Hotfix", "DisableOverlays")
+    optifg = get("FrameGen", "Enabled") == "true" and get("FrameGen", "FGInput") == "upscaler"
+    if overlays == "true" or (overlays == "auto" and optifg):
+        hints.append({"level": "warn", "text": "DisableOverlays is on" + (" (auto, because of OptiScaler's frame "
+                                                "generation)" if overlays == "auto" else "") +
+                      ": it also blocks Steam Input, so the Deck's controls may stop working in the game. If that "
+                      "happens, set DisableOverlays = false ([Hotfix])."})
+    if get("Menu", "OverlayMenu") == "false":
+        hints.append({"level": "info", "text": "OverlayMenu = false: OptiScaler's new menu is off, which also turns off "
+                                               "its frame generation features."})
+    key = get("Menu", "ShortcutKey")
+    if key == "-1":
+        hints.append({"level": "info", "text": "OptiScaler's menu has no shortcut key (ShortcutKey = -1)."})
+    else:
+        try:
+            code = 0x2D if key == "auto" else int(key, 0)
+            name = VK_NAMES.get(code, f"key 0x{code:02X}")
+        except ValueError:
+            name = key
+        hints.append({"level": "info", "text": f"OptiScaler's menu opens with {name}. The Deck has no such key: map it "
+                                               f"to a back button in the game's controller layout (Steam Input)."})
+    return hints
+
+
 def opti_state(opti_dir, game_folder):
     ini = opti_dir / "OptiScaler.ini"
     text = read_text(ini)
@@ -714,6 +863,8 @@ def opti_state(opti_dir, game_folder):
         "current_sr_dll": file_info(current_sr) if current_sr else None,
         "kept_fsr4": (sub / FSR4_COPY_NAME).exists(),
         "log_to_file": (ini_get(text, "Log", "LogToFile") or "auto").lower() == "true",
+        "disabled": installed_kind(opti_dir) in ("ffx", "ngx") and bool((install_marker(opti_dir) or {}).get("disabled")),
+        "hints": opti_hints(text),
     }
 
 
@@ -721,6 +872,9 @@ def opti_state(opti_dir, game_folder):
 
 def install_direct(target, dll, ini_src):
     orig = original_of(target)
+    dis = disabled_path(target)
+    if dis.exists() and is_helixsr(dis) and not is_helixsr(target):
+        dis.unlink()   # a disabled install: replaced by the new one
     if is_helixsr(target):
         if not orig.exists():
             raise RuntimeError(f"{target.name} is HelixSR but the game's file is missing ({orig.name}); left as it is.")
@@ -744,8 +898,39 @@ def install_direct(target, dll, ini_src):
     return msg
 
 
+def disabled_path(target):
+    """Where a disabled direct install keeps HelixSR's DLL while the game's own FSR DLL is back in place."""
+    return target.with_name(target.stem + ".helixsr-disabled.dll")
+
+
+def disable_direct(target):
+    orig, dis = original_of(target), disabled_path(target)
+    if not (is_helixsr(target) and orig.exists()):
+        raise RuntimeError("HelixSR isn't active in place of this DLL.")
+    os.replace(target, dis)
+    os.replace(orig, target)
+    return "Disabled: the game's own FSR is back. Enable puts HelixSR back (no download, no setup)."
+
+
+def enable_direct(target):
+    orig, dis = original_of(target), disabled_path(target)
+    if not (dis.exists() and is_helixsr(dis)):
+        raise RuntimeError("No disabled HelixSR here.")
+    if orig.exists() or is_helixsr(target):
+        raise RuntimeError(f"{orig.name} already exists or {target.name} is HelixSR; left as it is.")
+    os.replace(target, orig)
+    os.replace(dis, target)
+    return "Enabled: HelixSR replaces the game's FSR again."
+
+
 def uninstall_direct(target, ini_src):
     orig = original_of(target)
+    dis = disabled_path(target)
+    if not orig.exists() and dis.exists() and is_helixsr(dis) and not is_helixsr(target):
+        dis.unlink()   # disabled: the game's file is already in place
+        for extra in (INSTALL_MARKER, "helixsr.log", *SEPARATE_FILES):
+            (target.parent / extra).unlink(missing_ok=True)
+        return f"Removed the disabled HelixSR next to {target.name}"
     if not orig.exists():
         raise RuntimeError(f"No backup ({orig.name}) next to {target.name}: nothing to restore.")
     if target.exists() and not is_helixsr(target):
@@ -890,6 +1075,45 @@ def uninstall_optiscaler_ngx(opti_dir):
     return "OptiScaler is back to its previous upscaler. Remove the launch option if you added it."
 
 
+def install_marker(opti_dir):
+    sub = Path(opti_dir) / OPTI_SUBDIR
+    return read_json(sub / OPTI_MARKER) if (sub / OPTI_MARKER).exists() else ngx_marker_data(opti_dir)
+
+
+def set_opti_disabled(opti_dir, disabled):
+    """Disable: OptiScaler.ini gets its previous upscaler settings back; HelixSR's files stay in the HelixSR folder.
+    Enable: HelixSR's settings again. An install made by HelixSR's own setup isn't touched."""
+    refuse_official(opti_dir)
+    kind = installed_kind(opti_dir)
+    if kind not in ("ffx", "ngx"):
+        raise RuntimeError("HelixSR isn't set up for OptiScaler here.")
+    sub = opti_dir / OPTI_SUBDIR
+    ini = opti_dir / "OptiScaler.ini"
+    marker_file = sub / (OPTI_MARKER if kind == "ffx" else NGX_MARKER)
+    data = json.loads(marker_file.read_text())
+    if kind == "ffx":
+        wanted = dict(data.get("set", {}))
+    else:
+        wanted = {"Upscalers/Dx12Upscaler": "dlss", "Libraries/NvngxPath": win_path(sub / DLL_NGX)}
+    previous = data["previous"] if kind == "ffx" else \
+        {"Upscalers/Dx12Upscaler": data["previous"].get("Dx12Upscaler"),
+         "Libraries/NvngxPath": data["previous"].get("NvngxPath")}
+    text = read_text(ini)
+    for sk, value in wanted.items():
+        section, key = sk.split("/", 1)
+        if disabled:
+            # only what still has HelixSR's value goes back (the user may have changed something since)
+            if (ini_get(text, section, key) or "") == (value or ""):
+                text = ini_set(text, section, key, previous.get(sk) or ("auto" if kind == "ngx" else None))
+        else:
+            text = ini_set(text, section, key, value)
+    write_text(ini, text)
+    data["disabled"] = bool(disabled)
+    marker_file.write_text(json.dumps(data, indent=1) + "\n")
+    return ("Disabled: OptiScaler uses its previous upscaler again; HelixSR's files stay. Enable switches back."
+            if disabled else "Enabled: OptiScaler uses HelixSR again.")
+
+
 def uninstall_optiscaler(opti_dir):
     ini = opti_dir / "OptiScaler.ini"
     sub = opti_dir / OPTI_SUBDIR
@@ -1013,6 +1237,15 @@ def shader_progress():
     return (done, len(sources) * 2) if sources else None
 
 
+def sha256_file(p):
+    import hashlib
+    h = hashlib.sha256()
+    with open(p, "rb") as f:
+        for block in iter(lambda: f.read(1 << 20), b""):
+            h.update(block)
+    return h.hexdigest()
+
+
 def read_json(p):
     try:
         return json.loads(Path(p).read_text())
@@ -1020,19 +1253,31 @@ def read_json(p):
         return None
 
 
+def build_only_script(script):
+    """From 1.7, helixsr-setup.sh builds the network and then runs HelixSR's own game installer (which also puts its own
+    OptiScaler into games). The plugin runs a copy that ends before that part ("# --- games ---"), so the installer is
+    never started, whatever it would do. A script whose layout doesn't match is refused rather than run."""
+    script = Path(script)
+    text = script.read_text(errors="replace")
+    if "helixsr_install.py" not in text:
+        return script   # up to 1.6: the setup only builds
+    if text.count(GAMES_MARKER) != 1 or "helixsr_install.py" in text.split(GAMES_MARKER)[0]:
+        raise RuntimeError("This release's setup changed in a way this plugin version hasn't been checked against, so "
+                           "it isn't run from here. Run it from Desktop Mode (Konsole: " + str(script) + ") or update "
+                           "the plugin.")
+    out = script.parent / BUILD_SCRIPT   # same folder: the script finds its setup/ files next to itself
+    out.write_text(text.split(GAMES_MARKER)[0] + "\nexit 0\n")
+    os.chmod(out, 0o755)
+    return out
+
+
 def setup_command(script, d, built):
-    """Arguments for a release's helixsr-setup.sh. Up to 1.6 the script takes the HelixSR folder and only builds.
-    From 1.7 it builds and then runs its own game installer, extra arguments are *game* folders, and a built network is
-    only rebuilt with --rebuild. Its installer is never answered (stdin is closed, so it stops at its first question):
-    the plugin installs per game itself. A script that would pass --yes on to its installer is refused, since --yes
-    could then mean "install into every game"."""
+    """Arguments for a release's setup. Up to 1.6 the script takes the HelixSR folder. From 1.7 extra arguments mean
+    *game* folders, and a built network is only rebuilt with --rebuild."""
     text = Path(script).read_text(errors="replace")
     if "--rebuild" not in text:
         return ["bash", str(script), str(d), "--yes"]
-    if re.search(r"helixsr_install\.py[^\n]*(PASS|--yes)", text):
-        raise RuntimeError("This release's setup would answer its own game installer automatically. Run it from "
-                           "Desktop Mode instead (Konsole: " + str(script) + "), then install per game here.")
-    return ["bash", str(script), "--yes"] + (["--rebuild"] if built else [])
+    return ["bash", str(build_only_script(script)), "--yes"] + (["--rebuild"] if built else [])
 
 
 def setup_status():
@@ -1288,21 +1533,34 @@ class Plugin:
     async def download_release(self, tag):
         try:
             def work():
-                rel = next((r for r in cached_releases() if r["tag"] == tag), None) or \
-                    next((r for r in fetch_releases() if r["tag"] == tag), None)
+                # fresh metadata: the checksum must be the one GitHub has now (zips get replaced under the same tag)
+                rel = next((r for r in fetch_releases() if r["tag"] == tag), None)
                 if not rel:
                     raise RuntimeError(f"Release {tag} not found on GitHub.")
                 d = version_dir(tag)
                 RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
                 zp = RUNTIME_DIR / rel["name"]
                 run_curl(["-o", str(zp), rel["url"]], timeout=600)
+                size = zp.stat().st_size
+                digest = sha256_file(zp)
+                if rel.get("size") and size != rel["size"]:
+                    zp.unlink()
+                    raise RuntimeError(f"Download incomplete ({size} of {rel['size']} bytes). Try again.")
+                if rel.get("sha256") and digest != rel["sha256"]:
+                    zp.unlink()
+                    raise RuntimeError("The download doesn't match GitHub's checksum (SHA256), so it wasn't used. Try "
+                                       "again; if it keeps failing, the release may be changing right now.")
                 if d.exists() and d != base_dir():
                     shutil.rmtree(d)   # a clean folder per release (a re-download means a fresh setup anyway)
                 extract_release(zp, d)
                 zp.unlink()
-                return d
-            d = await asyncio.to_thread(work)
-            return {"ok": True, "message": f"HelixSR {tag} downloaded to {d}. Now run its setup."}
+                (d / DOWNLOAD_META).write_text(json.dumps({
+                    "tag": tag, "sha256": digest, "size": size, "verified": bool(rel.get("sha256")),
+                    "asset_updated": rel.get("asset_updated"), "downloaded_at": time.time()}, indent=1))
+                return d, bool(rel.get("sha256"))
+            d, verified = await asyncio.to_thread(work)
+            return {"ok": True, "message": f"HelixSR {tag} downloaded{' and verified' if verified else ''} to {d}. "
+                                           f"Now run its setup."}
         except Exception as e:
             decky.logger.exception("download")
             return {"ok": False, "error": str(e)}
@@ -1438,14 +1696,17 @@ class Plugin:
             def work():
                 g = self._game(appid)
                 folder = Path(g["path"])
-                dlls, opti = scan_folder(folder)
+                anticheat = []
+                dlls, opti = scan_folder(folder, anticheat)
                 direct = []
                 for t in direct_targets(dlls):
                     orig = original_of(t)
                     helix = is_helixsr(t)
                     state = ("helixsr" if orig.exists() else "helixsr_no_backup") if helix else \
-                        ("conflict" if orig.exists() else "original")
-                    v = helix_version(t) if helix else None
+                        ("conflict" if orig.exists() else
+                         "disabled" if disabled_path(t).exists() and is_helixsr(disabled_path(t)) else "original")
+                    v = helix_version(t) if helix else \
+                        helix_version(disabled_path(t)) if state == "disabled" else None
                     direct.append({
                         "path": str(t), "rel": os.path.relpath(t, folder), "state": state, "helix_version": v,
                         "near_optiscaler": near_optiscaler(t, opti), "size": t.stat().st_size,
@@ -1460,11 +1721,39 @@ class Plugin:
                     st["ini"] = helix_ini_values(sub)
                     st["helix_folder"] = str(sub)
                     optis.append(st)
-                return {"ok": True, **g, "direct": direct, "optiscaler": optis}
+                acks = load_settings().get("anticheat_ack", {})
+                procs = game_processes(folder, g["appid"])
+                starts = [p["started"] for p in procs if p["started"]]
+                return {"ok": True, **g, "direct": direct, "optiscaler": optis,
+                        "running": [p["name"] for p in procs], "steam_busy": steam_busy(g),
+                        # when the current (running) or last game session started, to judge how fresh a log is
+                        "session": {"running": bool(procs), "started": min(starts) if starts else None,
+                                    "last_played": last_played(g["appid"])},
+                        "anticheat": anticheat, "anticheat_ack": bool(acks.get(str(g["appid"])))}
             return await asyncio.to_thread(work)
         except Exception as e:
             decky.logger.exception("get_game")
             return {"ok": False, "error": str(e)}
+
+    def _guard(self, path, installing):
+        """Refuses a change to a game's files while the game runs, while Steam still writes them, or (installing only)
+        in a game with anti-cheat that hasn't been acknowledged in the panel."""
+        rp = os.path.realpath(path)
+        game = next((g for g in installed_games().values()
+                     if rp == os.path.realpath(g["path"]) or rp.startswith(os.path.realpath(g["path"]) + os.sep)), None)
+        if game is None:
+            return
+        running = [r["name"] for r in game_processes(game["path"], game["appid"])]
+        if running:
+            raise RuntimeError(f"{game['name']} is running ({', '.join(running[:2])}). Close it first.")
+        busy = steam_busy(game)
+        if busy:
+            raise RuntimeError(busy)
+        if installing and not load_settings().get("anticheat_ack", {}).get(str(game["appid"])):
+            found = []
+            scan_folder(game["path"], found)
+            if found:
+                raise RuntimeError(f"{game['name']} ships anti-cheat ({found[0]}). Confirm the risk in the panel first.")
 
     def _checked_target(self, path):
         t = Path(path)
@@ -1491,18 +1780,49 @@ class Plugin:
             if dll_kind(dll) == "ngx":
                 raise RuntimeError(f"HelixSR {helix_version(dll)} only works through OptiScaler (as DLSS). Pick a 1.4 "
                                    f"release to replace a game's FSR 3.1 directly.")
+            self._guard(path, True)
             return install_direct(self._checked_target(path), dll, active_dir() / "helixsr.ini")
         return await self._do(work)
 
     async def uninstall_direct(self, path):
-        return await self._do(lambda: uninstall_direct(self._checked_target(path), active_dir() / "helixsr.ini"))
+        def work():
+            self._guard(path, False)
+            return uninstall_direct(self._checked_target(path), active_dir() / "helixsr.ini")
+        return await self._do(work)
 
     async def install_optiscaler(self, path, keep_fsr4):
-        return await self._do(lambda: install_optiscaler(self._checked_opti(path), built_dll(),
-                                                         active_dir() / "helixsr.ini", bool(keep_fsr4)))
+        def work():
+            self._guard(path, True)
+            return install_optiscaler(self._checked_opti(path), built_dll(), active_dir() / "helixsr.ini",
+                                      bool(keep_fsr4))
+        return await self._do(work)
 
     async def uninstall_optiscaler(self, path):
-        return await self._do(lambda: uninstall_optiscaler(self._checked_opti(path)))
+        def work():
+            self._guard(path, False)
+            return uninstall_optiscaler(self._checked_opti(path))
+        return await self._do(work)
+
+    async def set_disabled(self, path, disabled):
+        """Disable (keep files) or enable a direct install (path = the DLL) or an OptiScaler install (path = folder)."""
+        def work():
+            self._guard(path, not disabled)
+            p = Path(path)
+            if p.name.lower() in NAMES:
+                t = self._checked_target(path)
+                return disable_direct(t) if disabled else enable_direct(t)
+            return set_opti_disabled(self._checked_opti(path), bool(disabled))
+        return await self._do(work)
+
+    async def set_anticheat_ack(self, appid, on):
+        s = load_settings()
+        acks = s.setdefault("anticheat_ack", {})
+        if on:
+            acks[str(appid)] = True
+        else:
+            acks.pop(str(appid), None)
+        save_settings(s)
+        return {"ok": True}
 
     async def set_opti_logging(self, path, on):
         def work():

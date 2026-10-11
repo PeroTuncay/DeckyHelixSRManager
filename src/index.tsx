@@ -31,6 +31,8 @@ type LocalVersion = {
   kind: ReleaseKind;
   built: boolean;
   setup_script: boolean;
+  verified?: boolean; // the download matched GitHub's SHA256
+  replaced_upstream?: boolean; // the zip on GitHub changed since it was downloaded
 };
 
 type Release = {
@@ -99,7 +101,7 @@ type IniValues = {
 type DirectTarget = {
   path: string;
   rel: string;
-  state: "original" | "helixsr" | "helixsr_no_backup" | "conflict";
+  state: "original" | "helixsr" | "helixsr_no_backup" | "conflict" | "disabled";
   helix_version: string | null;
   near_optiscaler: boolean;
   size: number;
@@ -122,6 +124,8 @@ type OptiTarget = {
   current_sr_dll: { path: string; size: number } | null;
   kept_fsr4: boolean;
   log_to_file: boolean;
+  disabled: boolean; // HelixSR's files stay, OptiScaler uses its previous upscaler
+  hints: { level: "warn" | "info"; text: string }[]; // OptiScaler settings worth knowing about
   check: Check;
   opti_log: { exists: boolean; path: string; mtime?: number; lines: string[]; not_nvidia: boolean };
   ini: IniValues;
@@ -167,9 +171,22 @@ type GameDetail = Result & {
   path: string;
   direct: DirectTarget[];
   optiscaler: OptiTarget[];
+  running: string[]; // processes of the game, if it runs
+  steam_busy: string | null; // Steam still installing/updating it
+  anticheat: string[]; // anti-cheat files found in the game folder
+  anticheat_ack: boolean;
+  session: Session;
 };
 
+// the current (running) or last game session, to tell whether a helixsr.log belongs to it
+type Session = { running: boolean; started: number | null; last_played: number | null };
+
+// Why installing / removing is blocked right now (the backend checks the same), or null
+type Guard = { install: string | null; remove: string | null };
+
 const getHelixState = callable<[], HelixState>("get_helix_state");
+const setAnticheatAck = callable<[appid: string, on: boolean], Result>("set_anticheat_ack");
+const setDisabled = callable<[path: string, disabled: boolean], Result>("set_disabled");
 const setHelixDir = callable<[path: string], HelixState>("set_helix_dir");
 const listReleases = callable<[], Result & { offline: boolean; releases: Release[] }>("list_releases");
 const setActive = callable<[tag: string], Result>("set_active");
@@ -616,6 +633,13 @@ function HelixSection({ state, refresh }: { state: HelixState | null; refresh: (
           </div>
         )}
         {rel?.published_at && <div>Published {new Date(rel.published_at).toLocaleDateString()}</div>}
+        {tag && local.get(tag)?.verified && <div>Download verified against GitHub's checksum (SHA256)</div>}
+        {tag && local.get(tag)?.replaced_upstream && (
+          <div style={{ color: "#e5a50a" }}>
+            The author has replaced this release's zip on GitHub since you downloaded it. Download it again (and run its
+            setup) to get the current files.
+          </div>
+        )}
         {tag && versionAtLeast(local.get(tag)?.version ?? tag, 1, 7) && (
           <div>
             Since 1.7, HelixSR replaces FSR 3.1 again: through OptiScaler for DLSS games (select DLSS in the game), or
@@ -697,9 +721,26 @@ function HelixSection({ state, refresh }: { state: HelixState | null; refresh: (
 
 // --- per-install pieces ------------------------------------------------------------------------------------------------
 
-function CheckBlock({ check, ini }: { check: Check; ini: IniValues }) {
+function sessionNote(check: Check, session?: Session): { color: string; text: string } | null {
+  if (!session) return null;
+  const date = (t: number) => new Date(t * 1000).toLocaleString();
+  if (session.running) {
+    if (!session.started) return null;
+    return check.mtime && check.mtime >= session.started
+      ? { color: "#5ba32b", text: "The log is from the current game session." }
+      : { color: "#e5a50a", text: "Nothing logged in the current session yet: HelixSR hasn't been asked to upscale (select it in the game / OptiScaler)." };
+  }
+  if (!session.last_played) return null;
+  if (!check.mtime) return { color: "#8b929a", text: `HelixSR wasn't loaded in the last session (${date(session.last_played)}).` };
+  return check.mtime >= session.last_played - 60
+    ? { color: "#8b929a", text: `The log is from the last game session (${date(session.last_played)}).` }
+    : { color: "#e5a50a", text: `The log is older than the last game session (${date(session.last_played)}): HelixSR wasn't used then.` };
+}
+
+function CheckBlock({ check, ini, session }: { check: Check; ini: IniValues; session?: Session }) {
   const s = STATUS[check.status];
   const u = check.last_upscale;
+  const fresh = sessionNote(check, session);
   return (
     <>
       {!ini.model_e_enabled && (
@@ -715,6 +756,7 @@ function CheckBlock({ check, ini }: { check: Check; ini: IniValues }) {
         <div style={small}>
           <span style={{ color: s.color, fontWeight: 600 }}>● {s.text}</span>
           {check.mtime && <div>helixsr.log written {new Date(check.mtime * 1000).toLocaleString()}</div>}
+          {fresh && <div style={{ color: fresh.color }}>{fresh.text}</div>}
           {u && (
             <div>
               Last upscale: {u.render} → {u.output} ({u.mode}, {u.ratio}x)
@@ -819,7 +861,19 @@ function IniControls({
   );
 }
 
-function DirectSection({ items, active, reload }: { items: DirectTarget[]; active: Active; reload: () => void }) {
+function DirectSection({
+  items,
+  active,
+  guard,
+  session,
+  reload,
+}: {
+  items: DirectTarget[];
+  active: Active;
+  guard: Guard;
+  session: Session;
+  reload: () => void;
+}) {
   const [busy, setBusy] = useState<string | null>(null);
   if (items.length === 0) return null;
 
@@ -844,6 +898,7 @@ function DirectSection({ items, active, reload }: { items: DirectTarget[]; activ
                 {installed && `HelixSR ${t.helix_version ?? ""} installed`}
                 {t.state === "helixsr_no_backup" && "HelixSR without a backup of the game's file"}
                 {t.state === "conflict" && "A backup exists but this file is not HelixSR (game updated?)"}
+                {t.state === "disabled" && `HelixSR ${t.helix_version ?? ""} disabled: the game's own FSR is active`}
               </div>
               {t.near_optiscaler && !installed && (
                 <div style={{ color: "#e5a50a" }}>
@@ -859,28 +914,42 @@ function DirectSection({ items, active, reload }: { items: DirectTarget[]; activ
             )}
             {t.state === "original" && active.kind !== "ngx" && (
               <PanelSectionRow>
-                <ButtonItem layout="below" disabled={!active.ready || busy !== null} onClick={() => run(t.path, () => installDirect(t.path))}>
+                <ButtonItem layout="below" disabled={!active.ready || busy !== null || !!guard.install} onClick={() => run(t.path, () => installDirect(t.path))}>
                   {active.ready ? `Install HelixSR ${active.version} here` : notReady(active)}
                 </ButtonItem>
               </PanelSectionRow>
             )}
             {differs && active.ready && active.kind !== "ngx" && (
               <PanelSectionRow>
-                <ButtonItem layout="below" disabled={busy !== null} onClick={() => run(t.path, () => installDirect(t.path))}>
+                <ButtonItem layout="below" disabled={busy !== null || !!guard.install} onClick={() => run(t.path, () => installDirect(t.path))}>
                   Switch to HelixSR {active.version}
                 </ButtonItem>
               </PanelSectionRow>
             )}
-            {(installed || t.state === "conflict") && (
+            {t.state === "disabled" && (
               <PanelSectionRow>
-                <ButtonItem layout="below" disabled={busy !== null} onClick={() => run(t.path, () => uninstallDirect(t.path))}>
-                  Restore the game's FSR
+                <ButtonItem layout="below" disabled={busy !== null || !!guard.install} onClick={() => run(t.path, () => setDisabled(t.path, false))}>
+                  Enable HelixSR again
+                </ButtonItem>
+              </PanelSectionRow>
+            )}
+            {installed && (
+              <PanelSectionRow>
+                <ButtonItem layout="below" disabled={busy !== null || !!guard.remove} onClick={() => run(t.path, () => setDisabled(t.path, true))}>
+                  Disable (keep HelixSR, use the game's FSR)
+                </ButtonItem>
+              </PanelSectionRow>
+            )}
+            {(installed || t.state === "conflict" || t.state === "disabled") && (
+              <PanelSectionRow>
+                <ButtonItem layout="below" disabled={busy !== null || !!guard.remove} onClick={() => run(t.path, () => uninstallDirect(t.path))}>
+                  {t.state === "disabled" ? "Remove HelixSR" : "Restore the game's FSR"}
                 </ButtonItem>
               </PanelSectionRow>
             )}
             {installed && (
               <>
-                <CheckBlock check={t.check} ini={t.ini} />
+                <CheckBlock check={t.check} ini={t.ini} session={session} />
                 <IniControls
                   folder={t.path.replace(/\/[^/]+$/, "")}
                   ini={t.ini}
@@ -1010,11 +1079,15 @@ function OptiItem({
   o,
   active,
   appid,
+  guard,
+  session,
   reload,
 }: {
   o: OptiTarget;
   active: Active;
   appid: string;
+  guard: Guard;
+  session: Session;
   reload: () => void;
 }) {
   const [busy, setBusy] = useState(false);
@@ -1040,6 +1113,8 @@ function OptiItem({
         <div>
           {official
             ? `HelixSR ${o.helix_version ?? ""} installed by HelixSR's own setup, together with its own OptiScaler`
+            : o.disabled
+            ? `HelixSR ${o.helix_version ?? ""} disabled: OptiScaler uses its previous upscaler`
             : o.configured
             ? installed === "ngx"
               ? `Uses HelixSR ${o.helix_version ?? ""} as DLSS`
@@ -1070,7 +1145,13 @@ function OptiItem({
           />
         </PanelSectionRow>
       )}
-      {official ? (
+      {o.disabled ? (
+        <PanelSectionRow>
+          <ButtonItem layout="below" disabled={busy || !!guard.install} onClick={() => run(() => setDisabled(o.dir, false))}>
+            Enable HelixSR again
+          </ButtonItem>
+        </PanelSectionRow>
+      ) : official ? (
         <Note>
           The plugin leaves this install to HelixSR's setup. To update or remove it, run helixsr-setup.sh from HelixSR's
           folder in Desktop Mode (answer r for this game to remove). The check below still works.
@@ -1079,7 +1160,7 @@ function OptiItem({
         <PanelSectionRow>
           <ButtonItem
             layout="below"
-            disabled={!active.ready || busy}
+            disabled={!active.ready || busy || !!guard.install}
             onClick={() => run(() => installOptiscaler(o.dir, keepFsr4 && !!o.current_sr_dll))}
           >
             {active.ready
@@ -1093,21 +1174,38 @@ function OptiItem({
         active.ready &&
         differs && (
           <PanelSectionRow>
-            <ButtonItem layout="below" disabled={busy} onClick={() => run(() => installOptiscaler(o.dir, o.kept_fsr4))}>
+            <ButtonItem layout="below" disabled={busy || !!guard.install} onClick={() => run(() => installOptiscaler(o.dir, o.kept_fsr4))}>
               Switch to HelixSR {active.version}
               {ngxActive && installed === "ffx" ? " (as DLSS)" : ""}
             </ButtonItem>
           </PanelSectionRow>
         )
       )}
+      {o.configured && !official && !o.disabled && (
+        <PanelSectionRow>
+          <ButtonItem layout="below" disabled={busy || !!guard.remove} onClick={() => run(() => setDisabled(o.dir, true))}>
+            Disable (keep HelixSR, use the previous upscaler)
+          </ButtonItem>
+        </PanelSectionRow>
+      )}
       {installed && !official && (
         <PanelSectionRow>
-          <ButtonItem layout="below" disabled={busy} onClick={() => run(() => uninstallOptiscaler(o.dir))}>
+          <ButtonItem layout="below" disabled={busy || !!guard.remove} onClick={() => run(() => uninstallOptiscaler(o.dir))}>
             Revert OptiScaler to previous upscaler
           </ButtonItem>
         </PanelSectionRow>
       )}
       <LaunchOptionControl appid={appid} needed={installed === "ngx"} />
+      {o.hints.length > 0 && (
+        <Note>
+          {o.hints.map((h) => (
+            <div key={h.text} style={{ color: h.level === "warn" ? "#e5a50a" : undefined, marginTop: 2 }}>
+              {h.level === "warn" ? "⚠ " : "ⓘ "}
+              {h.text}
+            </div>
+          ))}
+        </Note>
+      )}
       {o.configured && (
         <>
           {installed === "ngx" && o.opti_log.not_nvidia && (
@@ -1118,7 +1216,7 @@ function OptiItem({
               </span>
             </Note>
           )}
-          <CheckBlock check={o.check} ini={o.ini} />
+          <CheckBlock check={o.check} ini={o.ini} session={session} />
           <Note>
             {installed === "ngx"
               ? "In the game, select DLSS as the upscaler. OptiScaler's menu then shows DLSS; switch to FSR there to compare live. A red frame around the picture means the network isn't built."
@@ -1172,8 +1270,54 @@ function GameSection({ appid, active }: { appid: string; active: Active }) {
   if (!game) return <PanelSection title="Game"><Note>Scanning…</Note></PanelSection>;
   if (!game.ok) return <PanelSection title="Game"><Note>{game.error}</Note></PanelSection>;
 
+  const removeBlock = game.running.length > 0 ? "running" : game.steam_busy;
+  const guard: Guard = {
+    remove: removeBlock,
+    install: removeBlock || (game.anticheat.length > 0 && !game.anticheat_ack ? "anticheat" : null),
+  };
+  const relevant = game.direct.length > 0 || game.optiscaler.length > 0;
+
   return (
     <>
+      {relevant && (game.running.length > 0 || game.steam_busy || game.anticheat.length > 0) && (
+        <PanelSection title={game.name}>
+          {game.running.length > 0 && (
+            <Note>
+              <span style={{ color: "#d94126", fontWeight: 600 }}>
+                The game is running ({game.running.slice(0, 2).join(", ")}). Close it to install, switch or remove
+                HelixSR.
+              </span>
+            </Note>
+          )}
+          {game.steam_busy && (
+            <Note>
+              <span style={{ color: "#e5a50a", fontWeight: 600 }}>{game.steam_busy}</span>
+            </Note>
+          )}
+          {game.anticheat.length > 0 && (
+            <>
+              <Note>
+                <span style={{ color: "#d94126", fontWeight: 600 }}>
+                  This game ships anti-cheat ({game.anticheat.slice(0, 2).join(", ")}). Anti-cheat can flag changed game
+                  DLLs, and online play could get your account banned. Only use HelixSR here for offline or single-player
+                  play, at your own risk.
+                </span>
+              </Note>
+              <PanelSectionRow>
+                <ToggleField
+                  label="I understand the risk"
+                  description="Allows installing HelixSR in this game."
+                  checked={game.anticheat_ack}
+                  onChange={async (on) => {
+                    await setAnticheatAck(game.appid, on);
+                    reload();
+                  }}
+                />
+              </PanelSectionRow>
+            </>
+          )}
+        </PanelSection>
+      )}
       {game.direct.length === 0 && game.optiscaler.length === 0 && (
         <PanelSection title={game.name}>
           <Note>
@@ -1182,11 +1326,11 @@ function GameSection({ appid, active }: { appid: string; active: Active }) {
           </Note>
         </PanelSection>
       )}
-      <DirectSection items={game.direct} active={active} reload={reload} />
+      <DirectSection items={game.direct} active={active} guard={guard} session={game.session} reload={reload} />
       {game.optiscaler.length > 0 && (
         <PanelSection title="OptiScaler">
           {game.optiscaler.map((o) => (
-            <OptiItem key={o.dir} o={o} active={active} appid={game.appid} reload={reload} />
+            <OptiItem key={o.dir} o={o} active={active} appid={game.appid} guard={guard} session={game.session} reload={reload} />
           ))}
         </PanelSection>
       )}

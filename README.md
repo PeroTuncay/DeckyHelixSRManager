@@ -1,19 +1,43 @@
 # HelixSR Manager (Decky plugin)
 
-Installs [HelixSR](https://github.com/lonewolf0622/HelixSR) into Steam games on the Steam Deck, following the
-HelixSR README, and checks that it actually runs.
+A Decky Loader plugin for the Steam Deck that installs [HelixSR](https://github.com/lonewolf0622/HelixSR) into your
+games, per game, and checks that it actually runs. HelixSR runs NVIDIA's DLSS upscaling network on AMD GPUs like the
+Deck's. This plugin contains no HelixSR files and no NVIDIA files: it downloads the official HelixSR release from
+GitHub and runs HelixSR's own setup, which builds the network locally on your Deck.
+
+HelixSR is developed by [lonewolf0622](https://github.com/lonewolf0622/HelixSR). This plugin is an independent
+integration, not affiliated with HelixSR, NVIDIA, AMD, OptiScaler or Decky.
+
+[Download the latest release](https://github.com/PeroTuncay/DeckyHelixSRManager/releases/latest) ·
+[Installation](#installation) · [Check that it runs](#4-check-that-it-runs) ·
+[Report a problem](https://github.com/PeroTuncay/DeckyHelixSRManager/issues/new)
 
 Tested on a Steam Deck OLED with The Witcher 3 (DirectX 12) through OptiScaler.
 
-> **HelixSR has changed its approach a few times.** Up to 1.4 and again **from 1.7** (tested up to 1.8), it replaces FSR 3.1
-> (`amd_fidelityfx_dx12.dll`): through OptiScaler for DLSS games (select DLSS in the game), or in place of a game's own
-> FSR 3.1. 1.5 and 1.6 instead replaced DLSS (`nvngx.dll`) through OptiScaler and needed a Steam launch option; those
-> releases were withdrawn upstream, but the plugin still supports a 1.5 you already downloaded.
+## Features
+
+- **Any HelixSR release:** pick a release from GitHub, download it (verified against GitHub's SHA256 checksum, with a
+  notice if the author later replaces the zip) and build it with a progress bar. Several releases can sit side by side.
+- **Per game, two routes:** in place of a game's own FSR 3.1, or through the OptiScaler the game already has (for
+  example from Decky Framegen), keeping your current FSR 4 selectable for comparison.
+- **Safe changes:** refuses while the game is running or Steam is still updating it, warns about anti-cheat (online
+  bans) and asks you to confirm, keeps the game's original files, and puts everything back on removal. Disable keeps
+  HelixSR's files for a quick switch back.
+- **Did it apply?** Reads HelixSR's log (network running, render and output size, whether the log is from the last
+  game session), shows OptiScaler settings that commonly get in the way (DLSS input off, Steam Input blocked, menu key),
+  and has a network on/off switch to prove HelixSR is doing the upscaling.
+- **Settings per game** where the release supports them (sharpening in 1.8, network resolution up to 1.4).
+- **Clean up:** remove every downloaded release and the setup's downloads in one go.
+
+> **HelixSR has changed its approach a few times.** Up to 1.4 and again **from 1.7** (tested up to 1.8), it replaces
+> FSR 3.1 (`amd_fidelityfx_dx12.dll`): through OptiScaler for DLSS games (select DLSS in the game), or in place of a
+> game's own FSR 3.1. 1.5 and 1.6 instead replaced DLSS (`nvngx.dll`) through OptiScaler and needed a Steam launch
+> option; those releases were withdrawn upstream, but the plugin still supports a 1.5 you already downloaded.
 >
 > From 1.7, HelixSR's own setup also installs its own OptiScaler into your games when run in a terminal. The plugin
-> runs that setup only to build the network: it leaves the setup's game questions unanswered (nothing gets installed
-> by it) and installs per game itself, into the OptiScaler the game already has (e.g. from Decky Framegen). Games
-> already set up by HelixSR's own setup are shown, but left to that setup.
+> runs only the build part of that setup, so HelixSR's own game installer never starts; it then installs per game
+> itself, into the OptiScaler the game already has. Games already set up by HelixSR's own setup are shown, but left to
+> that setup. A setup whose layout the plugin doesn't recognize isn't run.
 
 ## Installation
 
@@ -21,7 +45,7 @@ Tested on a Steam Deck OLED with The Witcher 3 (DirectX 12) through OptiScaler.
 
 1. In Decky Loader, open **Settings → General** and turn on **Developer mode**.
 2. Open **Settings → Developer → Install plugin from URL** and paste the link to `HelixSR-Manager.zip` from the
-   [latest release](https://github.com/PeroTuncay/HelixSRManager/releases/latest) (on the release page: right-click
+   [latest release](https://github.com/PeroTuncay/DeckyHelixSRManager/releases/latest) (on the release page: right-click
    or long-press the zip → copy link).
    Alternatively, download the zip, copy it to the Deck and use **Install plugin from ZIP file**.
 3. Open the Quick Access menu (`···` button) → Decky → **HelixSR Manager**.
@@ -122,6 +146,13 @@ next to HelixSR, since HelixSR has none of its own; OptiScaler's own frame gener
    `NetworkResolution` choices come from the installed release's own `helixsr.ini`, since they differ between
    releases (1.4.3 is HelixSR 1.3.0 again: auto/fast/full; 1.4.0-1.4.2: auto/full/QSSM/PRSM). 1.5+ has no settings
    file; only the experimental network switch is offered there.
+9. **Safety checks**: no change to a game's files while it runs (detected through Steam's process environment or a
+   Windows program inside the game folder) or while Steam is still installing/updating it (`StateFlags`, download
+   folder). Games with anti-cheat files (EasyAntiCheat, BattlEye, …) need an explicit "I understand the risk" before
+   installing; removing is always allowed.
+10. **Disable / Enable**: a direct install parks HelixSR's DLL as `*.helixsr-disabled.dll` and puts the game's file
+    back; an OptiScaler install restores the previous `OptiScaler.ini` values and keeps the `HelixSR` folder. Enable
+    switches back without downloading or building anything.
 
 ## Build
 
