@@ -1754,7 +1754,9 @@ class Plugin:
                                   "helix_version": helix_version(d / DLL_NGX), "check": helix_log_check(d)}
                                  for d in dlss_dirs if d not in opti]   # with OptiScaler.ini there: shown in its section
                 return {"ok": True, **g, "direct": direct, "optiscaler": optis, "official_dlss": official_dlss,
-                        "running": [p["name"] for p in procs], "steam_busy": steam_busy(g),
+                        # the game's own .exe first (Steam's helpers like reaper/srt-bwrap carry its app id too)
+                        "running": sorted((p["name"] for p in procs), key=lambda n: ".exe" not in n.lower()),
+                        "steam_busy": steam_busy(g),
                         # when the current (running) or last game session started, to judge how fresh a log is
                         "session": {"running": bool(procs), "started": min(starts) if starts else None,
                                     "last_played": last_played(g["appid"])},
@@ -1772,7 +1774,8 @@ class Plugin:
                      if rp == os.path.realpath(g["path"]) or rp.startswith(os.path.realpath(g["path"]) + os.sep)), None)
         if game is None:
             return
-        running = [r["name"] for r in game_processes(game["path"], game["appid"])]
+        running = sorted((r["name"] for r in game_processes(game["path"], game["appid"])),
+                         key=lambda n: ".exe" not in n.lower())
         if running:
             raise RuntimeError(f"{game['name']} is running ({', '.join(running[:2])}). Close it first.")
         busy = steam_busy(game)

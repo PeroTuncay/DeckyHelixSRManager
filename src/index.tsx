@@ -1507,9 +1507,9 @@ function GameSection({ appid, active }: { appid: string; active: Active }) {
           </PanelSectionRow>
           {game.running.length > 0 && (
             <Note>
-              <span style={{ color: "#d94126", fontWeight: 600 }}>
-                The game is running ({game.running.slice(0, 2).join(", ")}). Close it to install, switch or remove
-                HelixSR.
+              <span style={{ color: YELLOW }}>
+                The game is running ({game.running.find((n) => n.toLowerCase().includes(".exe")) ?? game.running[0]}).
+                Installing, switching or removing HelixSR works after you quit it; the status above still updates.
               </span>
             </Note>
           )}
