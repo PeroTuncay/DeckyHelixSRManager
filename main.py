@@ -62,7 +62,10 @@ NETWORK_RESOLUTIONS = ["auto", "full",
                        "QSSM Min", "QSSM Eco", "QSSM Light", "QSSM Balanced", "QSSM High", "QSSM Ultra",
                        "PRSM Light", "PRSM Quality", "PRSM Balanced", "PRSM Performance", "PRSM Ultra",
                        "PRSM Extreme"]
-SHARPENING_MODES = ["off", "game", "override"]
+SHARPENING_MODES = ["off", "game", "override"]       # up to 1.4: [Sharpening] Mode
+SHARPENERS = ["off", "nvidia", "rcas"]                 # 1.8+: [Sharpening] Sharpener (NVIDIA's NIS or AMD's RCAS)
+# a helixsr.ini holding nothing but these values is the same as none (the plugin removes such a file)
+INI_DEFAULTS = {("modele", "enabled"): "true", ("sharpening", "sharpener"): "off", ("sharpening", "sharpness"): "0.5"}
 
 # helixsr.log lines worth showing (taken from the strings HelixSR 1.4.1 logs)
 LOG_HIGHLIGHTS = ("network running", "HelixSR ERROR", "NOT RUNNING", "summary:", "wave size:", "upscaler list:",
@@ -569,6 +572,24 @@ def opti_log_check(opti_dir):
     return {"exists": True, "path": str(log), "mtime": info["mtime"], "lines": lines[-15:], "not_nvidia": not_nvidia}
 
 
+def ini_holds_only_defaults(text):
+    """True when a helixsr.ini sets nothing but HelixSR's defaults (INI_DEFAULTS), e.g. one the plugin created for a
+    setting that was switched back. A release's own helixsr.ini (1.2-1.4) has more keys and never qualifies."""
+    cur = None
+    for line in text.splitlines():
+        l = line.strip()
+        if not l or l.startswith((";", "#")):
+            continue
+        m = re.match(r"^\[(.+?)\]$", l)
+        if m:
+            cur = m.group(1).strip().lower()
+            continue
+        m = re.match(r"^([^=]+?)\s*=\s*(.*)$", l)
+        if not m or INI_DEFAULTS.get((cur, m.group(1).strip().lower())) != m.group(2).strip().lower():
+            return False
+    return True
+
+
 def network_resolution_options(text):
     """The NetworkResolution values the installed release documents in its own helixsr.ini ([Upscaling]): the option
     list in its comments (";   auto  ...", ";   fast  ...") plus commented-out presets (";NetworkResolution = QSSM Min").
@@ -592,7 +613,7 @@ def helix_ini_values(folder):
     ini = Path(folder) / "helixsr.ini"
     if not ini.exists():
         return {"exists": False, "network_resolution": "auto", "sharpening": "off", "upscaler_dll": "",
-                "model_e_enabled": True, "network_resolutions": []}
+                "model_e_enabled": True, "network_resolutions": [], "sharpener": "off", "sharpness": "0.5"}
     t = read_text(ini)
     return {"exists": True,
             "network_resolution": ini_get(t, "Upscaling", "NetworkResolution") or "auto",
@@ -600,7 +621,9 @@ def helix_ini_values(folder):
             "upscaler_dll": ini_get(t, "Forwarding", "UpscalerDll") or "",
             # HelixSR's default is on; anything but an explicit false counts as on
             "model_e_enabled": (ini_get(t, "ModelE", "Enabled") or "true").strip().lower() != "false",
-            "network_resolutions": network_resolution_options(t)}
+            "network_resolutions": network_resolution_options(t),
+            "sharpener": (ini_get(t, "Sharpening", "Sharpener") or "off").strip().lower(),
+            "sharpness": (ini_get(t, "Sharpening", "Sharpness") or "0.5").strip()}
 
 
 # --- OptiScaler -------------------------------------------------------------------------------------------------------
@@ -764,6 +787,15 @@ def install_optiscaler(opti_dir, dll, ini_src, keep_fsr4):
     # frame generation: HelixSR forwards non-upscaling effects to amd_fidelityfx_dx12.original.dll next to it
     if cur_ffx and not is_helixsr(cur_ffx) and not (sub / "amd_fidelityfx_dx12.original.dll").exists():
         shutil.copyfile(cur_ffx, sub / "amd_fidelityfx_dx12.original.dll")
+    # frame generation: HelixSR has none of its own and also looks for AMD's FG DLL next to itself (1.8 logs a hint
+    # when it finds neither). The game's current one, else AMD's that comes with the release (1.8+). OptiScaler's own
+    # FfxDx12FGPath stays as it is.
+    fg = "amd_fidelityfx_framegeneration_dx12.dll"
+    if not (sub / fg).exists():
+        fg_src = resolve_ffx(opti_dir, text, "FfxDx12FGPath", fg) or \
+            next((p for p in (dll.parent / "amd-fsr" / fg,) if p.exists()), None)
+        if fg_src and not is_helixsr(fg_src):
+            shutil.copyfile(fg_src, sub / fg)
     if not (sub / "helixsr.ini").exists() and ini_src.exists():
         shutil.copyfile(ini_src, sub / "helixsr.ini")
     hini = sub / "helixsr.ini"
@@ -774,8 +806,10 @@ def install_optiscaler(opti_dir, dll, ini_src, keep_fsr4):
     elif not keep_fsr4:
         if (sub / FSR4_COPY_NAME).exists():
             (sub / FSR4_COPY_NAME).unlink()
-        htext = ini_set(htext, "Forwarding", "UpscalerDll", "")
-    write_text(hini, htext)
+        if hini.exists():   # don't create a settings file just to clear a setting
+            htext = ini_set(htext, "Forwarding", "UpscalerDll", "")
+    if hini.exists() or htext.strip():
+        write_text(hini, htext)
 
     wanted = {
         ("Upscalers", "Dx12Upscaler"): opti_upscaler_value(text),
@@ -1498,13 +1532,15 @@ class Plugin:
                 text = ini_set(text, "Sharpening", "Mode", value)
             elif option == "model_e" and value in ("true", "false"):
                 text = ini_set(text, "ModelE", "Enabled", value)
+            elif option == "sharpener" and value in SHARPENERS:
+                text = ini_set(text, "Sharpening", "Sharpener", value)
+            elif option == "sharpness" and re.fullmatch(r"(0(\.\d+)?|1(\.0+)?)", value or ""):
+                text = ini_set(text, "Sharpening", "Sharpness", value)
             else:
                 raise RuntimeError("Unknown option.")
             # a file the plugin created only for the network switch goes away again when it's back on, so no stray
             # helixsr.ini is left in a release without a settings file (or in an install made by HelixSR's setup)
-            meaningful = [re.sub(r"\s+", "", l) for l in text.splitlines()
-                          if l.strip() and not l.strip().startswith((";", "#"))]
-            if meaningful in ([], ["[ModelE]", "Enabled=true"]):
+            if ini_holds_only_defaults(text):
                 ini.unlink(missing_ok=True)
                 return "Saved (back to HelixSR's default). Restart the game to apply."
             write_text(ini, text)

@@ -5,7 +5,7 @@ HelixSR README, and checks that it actually runs.
 
 Tested on a Steam Deck OLED with The Witcher 3 (DirectX 12) through OptiScaler.
 
-> **HelixSR has changed its approach a few times.** Up to 1.4 and again **from 1.7**, it replaces FSR 3.1
+> **HelixSR has changed its approach a few times.** Up to 1.4 and again **from 1.7** (tested up to 1.8), it replaces FSR 3.1
 > (`amd_fidelityfx_dx12.dll`): through OptiScaler for DLSS games (select DLSS in the game), or in place of a game's own
 > FSR 3.1. 1.5 and 1.6 instead replaced DLSS (`nvngx.dll`) through OptiScaler and needed a Steam launch option; those
 > releases were withdrawn upstream, but the plugin still supports a 1.5 you already downloaded.
@@ -74,8 +74,10 @@ only takes effect when the game starts. For a live side-by-side comparison, swit
 FSR 3.1.5 / FSR 4 in OptiScaler's menu (Upscalers → FFX Upscaler); an entry named just "FSR 3.1.5" is AMD's FSR 3.1,
 not HelixSR.
 
-From HelixSR 1.5 on the network switch is experimental: these releases document no settings, but their DLLs still
-contain this switch. 1.7 ignores sharpening, so that setting is hidden there.
+From HelixSR 1.5 on the network switch is experimental: these releases don't document it, but their DLLs still
+contain it. Sharpening: up to 1.4 the release's `[Sharpening] Mode`; 1.5-1.7 none; from 1.8 optional sharpening, off by
+default as DLSS: **Sharpening** (NVIDIA's Image Sharpening or AMD's RCAS) and **Sharpness** (0.5 = NVIDIA's default),
+written to the game's `helixsr.ini`. A `helixsr.ini` that holds nothing but default values is removed again.
 
 To undo: **Revert OptiScaler to previous upscaler** (plus **Remove HelixSR launch option** for 1.5+) or **Restore the
 game's FSR**.
@@ -99,7 +101,9 @@ game's FSR**.
    `amd_fidelityfx_dx12.dll` and `amd_fidelityfx_upscaler_dx12.dll`, and sets in `OptiScaler.ini`:
    `Dx12Upscaler` (`ffx` on OptiScaler 0.9+, `fsr31` on older versions), `FfxDx12Path`, `FfxDx12SRPath` (as `Z:\…`
    paths) and `[FSR] UpscalerIndex=0`. The old values are remembered and restored on revert; a full copy is kept as
-   `OptiScaler.ini.helixsr-backup`. With **Keep current FSR selectable**, the FSR 4 DLL OptiScaler used so far is copied
+   `OptiScaler.ini.helixsr-backup`. A frame generation DLL (the game's current one, else AMD's from the release) is put
+next to HelixSR, since HelixSR has none of its own; OptiScaler's own frame generation setting is left alone. With
+**Keep current FSR selectable**, the FSR 4 DLL OptiScaler used so far is copied
    in as `amd_fidelityfx_upscaler_dx12.amd.dll` and set as HelixSR's `[Forwarding] UpscalerDll`, so FSR 4 stays in
    OptiScaler's FFX Upscaler list for comparison. The previous `amd_fidelityfx_dx12.dll` is copied in as
    `amd_fidelityfx_dx12.original.dll` so frame generation keeps working.

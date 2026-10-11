@@ -92,6 +92,8 @@ type IniValues = {
   upscaler_dll: string;
   model_e_enabled: boolean;
   network_resolutions: string[]; // what this install's own helixsr.ini documents (differs between releases)
+  sharpener: string; // 1.8+: off / nvidia / rcas
+  sharpness: string; // 1.8+: 0.0 - 1.0
 };
 
 type DirectTarget = {
@@ -140,11 +142,23 @@ function isNgxRelease(tag: string | null, local?: LocalVersion) {
   return versionAtLeast(tag, 1, 5) && !versionAtLeast(tag, 1, 7);
 }
 
-// 1.5+ have no settings file (1.7 ignores sharpening "whatever an old helixsr.ini says"); only the network test switch
-// is offered there, as an experiment, since their DLLs still contain it
-function hasSettingsFile(kind: string | null, version: string | null | undefined) {
-  return kind !== "ngx" && kind !== "official" && !versionAtLeast(version, 1, 5);
+// Settings differ per release: up to 1.4 the release's helixsr.ini (sharpening Mode, NetworkResolution); 1.5-1.7 none
+// (1.7 ignores sharpening "whatever an old helixsr.ini says"); 1.8+ optional sharpening (Sharpener / Sharpness, off by
+// default). The network test switch is offered everywhere, as an experiment from 1.5 on.
+type SettingsStyle = "legacy" | "none" | "sharpener";
+
+function settingsStyle(kind: string | null, version: string | null | undefined): SettingsStyle {
+  if (versionAtLeast(version, 1, 8)) return "sharpener";
+  if (kind === "ngx" || kind === "official" || versionAtLeast(version, 1, 5)) return "none";
+  return "legacy";
 }
+
+const SHARPENERS = [
+  { data: "off", label: "Off (as DLSS)" },
+  { data: "nvidia", label: "NVIDIA (Image Sharpening)" },
+  { data: "rcas", label: "AMD RCAS (FSR's)" },
+];
+const SHARPNESS = ["0.1", "0.2", "0.3", "0.4", "0.5", "0.6", "0.7", "0.8", "0.9", "1.0"];
 
 type GameSummary = { appid: string; name: string; path: string; fsr: boolean; optiscaler: boolean; helixsr: boolean };
 type GameDetail = Result & {
@@ -604,9 +618,11 @@ function HelixSection({ state, refresh }: { state: HelixState | null; refresh: (
         {rel?.published_at && <div>Published {new Date(rel.published_at).toLocaleDateString()}</div>}
         {tag && versionAtLeast(local.get(tag)?.version ?? tag, 1, 7) && (
           <div>
-            1.7 replaces FSR 3.1 again: through OptiScaler for DLSS games (select DLSS in the game), or in place of a
-            game's own FSR 3.1. No launch option, no settings. Run in Desktop Mode, HelixSR's own setup would also put its
-            own OptiScaler into your games; the plugin only builds the network and uses the OptiScaler you already have.
+            Since 1.7, HelixSR replaces FSR 3.1 again: through OptiScaler for DLSS games (select DLSS in the game), or
+            in place of a game's own FSR 3.1 (select AMD FSR). No launch option
+            {versionAtLeast(local.get(tag)?.version ?? tag, 1, 8) ? "; optional sharpening per game (1.8)" : ", no settings"}.
+            Run in Desktop Mode, HelixSR's own setup would also put its own OptiScaler into your games; the plugin only
+            builds the network and uses the OptiScaler you already have.
           </div>
         )}
         {tag && isNgxRelease(tag, local.get(tag)) && (
@@ -719,14 +735,15 @@ function CheckBlock({ check, ini }: { check: Check; ini: IniValues }) {
 function IniControls({
   folder,
   ini,
-  settingsFile,
+  style,
   onChange,
 }: {
   folder: string;
   ini: IniValues;
-  settingsFile: boolean;
+  style: SettingsStyle;
   onChange: () => void;
 }) {
+  const settingsFile = style === "legacy";
   const save = async (option: string, value: string) => {
     toast(await setHelixOption(folder, option, value));
     onChange();
@@ -745,6 +762,30 @@ function IniControls({
           onChange={(on) => save("model_e", on ? "true" : "false")}
         />
       </PanelSectionRow>
+      {style === "sharpener" && (
+        <>
+          <PanelSectionRow>
+            <DropdownItem
+              label="Sharpening"
+              description="Off by default, as DLSS. Restart the game after changing it."
+              rgOptions={SHARPENERS}
+              selectedOption={SHARPENERS.some((o) => o.data === ini.sharpener) ? ini.sharpener : "off"}
+              onChange={(o) => save("sharpener", o.data)}
+            />
+          </PanelSectionRow>
+          {ini.sharpener !== "off" && (
+            <PanelSectionRow>
+              <DropdownItem
+                label="Sharpness"
+                description="0.5 is NVIDIA's default."
+                rgOptions={SHARPNESS.map((v) => ({ data: v, label: v }))}
+                selectedOption={SHARPNESS.find((v) => Number(v) === Number(ini.sharpness)) ?? "0.5"}
+                onChange={(o) => save("sharpness", o.data)}
+              />
+            </PanelSectionRow>
+          )}
+        </>
+      )}
       {settingsFile && (
         <>
       {ini.network_resolutions.length > 0 && (
@@ -843,7 +884,7 @@ function DirectSection({ items, active, reload }: { items: DirectTarget[]; activ
                 <IniControls
                   folder={t.path.replace(/\/[^/]+$/, "")}
                   ini={t.ini}
-                  settingsFile={hasSettingsFile("ffx", t.helix_version)}
+                  style={settingsStyle("ffx", t.helix_version)}
                   onChange={reload}
                 />
               </>
@@ -1104,7 +1145,7 @@ function OptiItem({
           <IniControls
             folder={o.helix_folder}
             ini={o.ini}
-            settingsFile={hasSettingsFile(installed, o.helix_version)}
+            style={settingsStyle(installed, o.helix_version)}
             onChange={reload}
           />
         </>
