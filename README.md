@@ -23,11 +23,16 @@ Tested on a Steam Deck OLED with The Witcher 3 (DirectX 12) through OptiScaler.
 - **Safe changes:** refuses while the game is running or Steam is still updating it, warns about anti-cheat (online
   bans) and asks you to confirm, keeps the game's original files, and puts everything back on removal. Disable keeps
   HelixSR's files for a quick switch back.
+- **Plain status per game:** one line saying whether HelixSR is installed and actually upscaled in the current or last
+  game session ("✓ Working: 853x533 → 1280x800"), or what to select in the game if not. Numbered steps (download,
+  build, install) show what's next, with a progress bar for the download and the build.
 - **Did it apply?** Reads HelixSR's log (network running, render and output size, whether the log is from the last
   game session), shows OptiScaler settings that commonly get in the way (DLSS input off, Steam Input blocked, menu key),
   and has a network on/off switch to prove HelixSR is doing the upscaling.
 - **Settings per game** where the release supports them (sharpening in 1.8, network resolution up to 1.4).
-- **Clean up:** remove every downloaded release and the setup's downloads in one go.
+- **Technical details on demand:** logs, paths and OptiScaler settings stay behind **Show technical details**; rarely
+  needed buttons (download again, delete, clean up, diagnostics, debug report) behind **More options**.
+- **Clean up (optional):** remove every downloaded release and the setup's downloads in one go. Not needed for updates.
 
 > **HelixSR has changed its approach a few times.** Up to 1.4 and again **from 1.7** (tested up to 1.8.1), it replaces
 > FSR 3.1 (`amd_fidelityfx_dx12.dll`): through OptiScaler for DLSS games (select DLSS in the game), or in place of a
@@ -56,16 +61,22 @@ Updating works the same way: install the newer zip over the old one.
 
 ### 2. Download and build HelixSR (once per release)
 
-1. Under **HelixSR**, pick a release in **Release to install** (the newest is marked *latest*).
-2. Press **Download**. The zip is checked against GitHub's SHA256 checksum before it's used.
-3. Press **Run setup (build network)** and confirm. HelixSR's setup downloads NVIDIA's DLSS 310.7.0 DLL, a portable
+The **HelixSR** section shows three numbered steps and only the button for the next one.
+
+1. Pick a version under **Version** (the newest is marked *latest*).
+2. Press **Download HelixSR …**. A progress bar shows the download; the zip is checked against GitHub's SHA256 checksum
+   before it's used.
+3. Press **Build HelixSR …** and confirm. HelixSR's setup downloads NVIDIA's DLSS 310.7.0 DLL, a portable
    Python with numpy and Microsoft's shader compiler, builds HelixSR's network (into HelixSR's DLL from 1.8, as two
    separate files before) and deletes NVIDIA's DLL again. From 1.7 on, only the build part of HelixSR's setup runs:
    its own game installer never starts, and the plugin installs per game in the next step.
 4. Wait for it to finish: **about 7-10 minutes on a Steam Deck OLED** (the first run includes the one-time downloads;
    later releases reuse Python and the compiler). Keep the Deck plugged in and don't let it sleep, since sleep pauses
    the setup. You can close the menu meanwhile; the progress bar picks up where it is when you reopen it.
-5. The release now shows **✓ ready**.
+5. Steps 1 and 2 show a ✓ and the version shows **✓ ready**.
+
+**Updating later:** pick the newer version, download and build it, then press **Switch to HelixSR …** in each game. It
+replaces the old version in that game; no cleanup is needed first.
 
 ### 3. Install HelixSR into a game
 
@@ -74,17 +85,17 @@ Close the game first: the plugin refuses to change its files while it runs or wh
 updating it. If the game ships anti-cheat (EasyAntiCheat, BattlEye, …), the plugin warns that online play could get
 your account banned and only installs after you turn on **I understand the risk** for that game.
 
-- **Game with OptiScaler (HelixSR 1.7, 1.8 or 1.4):** in the **OptiScaler** section press **Use HelixSR in
-  OptiScaler**. Leave **Keep current FSR selectable** on to keep your FSR 4 available for comparison. In the game,
+- **Game with OptiScaler (HelixSR 1.7, 1.8 or 1.4):** in the **OptiScaler** section press **Install HelixSR …
+  via OptiScaler**. Leave **Keep current FSR selectable** on to keep your FSR 4 available for comparison. In the game,
   select DLSS (or FSR / XeSS in games without DLSS), then open OptiScaler's menu and pick **FSR HelixSR (3.1.5)** under
   Upscalers → FFX Upscaler. OptiScaler's menu opens with Insert by default, which the Deck doesn't have: map it to a
   back button in the game's controller layout (the plugin shows the key the game's `OptiScaler.ini` uses).
   `Dx12Upscaler` is set to what the game's OptiScaler expects (`fsr31` on OptiScaler 0.9.4).
-- **Game that ships FSR 3.1 itself (HelixSR 1.4, 1.7 or 1.8):** in **Replace the game's FSR 3.1** press **Install
-  HelixSR here**, then select AMD FSR as the upscaler in the game's settings. This needs no OptiScaler. A game that
+- **Game that ships FSR 3.1 itself (HelixSR 1.4, 1.7 or 1.8):** in **In place of the game's FSR 3.1** press **Install
+  HelixSR … here**, then select AMD FSR as the upscaler in the game's settings. This needs no OptiScaler. A game that
   offers both sections works either way (HelixSR 1.8's own setup prefers this one).
-- **HelixSR 1.5.x (withdrawn upstream; only if you still have it):** in the **OptiScaler** section press **Use HelixSR
-  in OptiScaler (as DLSS)**, then **Add launch option**: it adds `PROTON_FORCE_NVAPI=1 DXVK_NVAPI_GPU_ARCH=AD100` in
+- **HelixSR 1.5.x (withdrawn upstream; only if you still have it):** in the **OptiScaler** section press **Install HelixSR
+  … via OptiScaler (as DLSS)**, then **Add launch option**: it adds `PROTON_FORCE_NVAPI=1 DXVK_NVAPI_GPU_ARCH=AD100` in
   front of the game's existing launch options (e.g. Decky Framegen's stay as they are). In the game, select **DLSS**.
 
 Switching a game between releases is one button; the plugin undoes the other setup first. Under the OptiScaler section
@@ -93,12 +104,18 @@ that blocks Steam Input).
 
 ### 4. Check that it runs
 
-After playing for a moment, press **Check again** in the plugin. Green **HelixSR network running** means it works. A
-red frame around the picture, or a red status, means the network isn't running; the plugin shows what HelixSR logged.
-The check also says whether the log is from the current or last game session (an older log means HelixSR wasn't used
-then) and what HelixSR last upscaled, e.g. "853x533 → 1280x800 (Quality, 1.5x), Network: Model E main".
+After playing for a moment, press **Check again** in the plugin. The status line under the game's name says it in
+plain words:
 
-**To prove HelixSR (and not FSR) is doing the upscaling**, turn off **DLSS network (Model E)** for that game and
+- **✓ Working**: HelixSR upscaled in the current or last game session, e.g. "853x533 → 1280x800 (Quality)".
+- **Installed, not used yet** / **waiting for the game** / **not used last time**: HelixSR didn't upscale; the line says
+  what to select in the game (DLSS through OptiScaler, AMD FSR for a game's own FSR 3.1).
+- **Installed, but HelixSR can't upscale** (red, also a red frame in the game): that copy has no built network.
+
+**Show technical details** adds what HelixSR logged, the log's time and session, and OptiScaler's log lines.
+
+**To prove HelixSR (and not FSR) is doing the upscaling**, turn on **Show technical details**, then turn off **DLSS
+network (Model E)** for that game and
 restart it. HelixSR then falls back to a simple, blurry placeholder upscale: if the picture changes, HelixSR is the
 active upscaler; if it looks the same, a different upscaler is selected. Turn the network back on afterwards. The switch
 only takes effect when the game starts (from 1.5 on it's undocumented upstream, so treat it as experimental). For a
@@ -146,7 +163,7 @@ next to HelixSR, since HelixSR has none of its own; OptiScaler's own frame gener
    running when the menu is closed or Decky restarts the plugin, and its exit code is recorded either way. If it
    fails: the error lines, **Show full log**, **Run diagnostics** (Proton, Python/numpy, free space, GitHub, …) and
    **Save debug report** (`~/HelixSR/helixsr-manager-debug.txt`).
-6. **Clean**: removes every downloaded release, the setup's Python, shader compiler and Wine data
+6. **Clean up downloads** (under More options, optional): removes every downloaded release, the setup's Python, shader compiler and Wine data
    (`~/.local/share/HelixSR`) and temporary files. Games keep their installed copy. Only files recognizably
    HelixSR's are removed from the HelixSR folder.
 7. **Check**: reads `helixsr.log` (network running / not running / loaded but idle, wave size, network resolution) and,

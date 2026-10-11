@@ -35,6 +35,7 @@ SETUP_DIR = RUNTIME_DIR / "setup"
 SETUP_STATUS = SETUP_DIR / "status.json"   # tag, pid, start time: survives plugin restarts
 SETUP_RC = SETUP_DIR / "exit-code"         # written by the wrapper shell when the setup ends
 SETUP_TMP = SETUP_DIR / "tmp"              # TMPDIR for the setup, so its work folder can be watched
+DOWNLOAD = {}                               # the download in progress (tag, zip path, expected size, phase)
 
 RELEASES_API = "https://api.github.com/repos/lonewolf0622/HelixSR/releases?per_page=100"
 RELEASES_CACHE = Path(decky.DECKY_PLUGIN_SETTINGS_DIR) / "releases.json"
@@ -1547,7 +1548,10 @@ class Plugin:
                 d = version_dir(tag)
                 RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
                 zp = RUNTIME_DIR / rel["name"]
+                zp.unlink(missing_ok=True)   # the progress reads its size
+                DOWNLOAD.update(tag=tag, path=str(zp), total=rel.get("size"), phase="downloading")
                 run_curl(["-o", str(zp), rel["url"]], timeout=600)
+                DOWNLOAD["phase"] = "verifying"
                 size = zp.stat().st_size
                 digest = sha256_file(zp)
                 if rel.get("size") and size != rel["size"]:
@@ -1557,6 +1561,7 @@ class Plugin:
                     zp.unlink()
                     raise RuntimeError("The download doesn't match GitHub's checksum (SHA256), so it wasn't used. Try "
                                        "again; if it keeps failing, the release may be changing right now.")
+                DOWNLOAD["phase"] = "extracting"
                 if d.exists() and d != base_dir():
                     shutil.rmtree(d)   # a clean folder per release (a re-download means a fresh setup anyway)
                 extract_release(zp, d)
@@ -1566,11 +1571,24 @@ class Plugin:
                     "asset_updated": rel.get("asset_updated"), "downloaded_at": time.time()}, indent=1))
                 return d, bool(rel.get("sha256"))
             d, verified = await asyncio.to_thread(work)
-            return {"ok": True, "message": f"HelixSR {tag} downloaded{' and verified' if verified else ''} to {d}. "
-                                           f"Now run its setup."}
+            return {"ok": True, "message": f"HelixSR {tag} downloaded{' and verified' if verified else ''}. "
+                                           f"Next step: build it (setup)."}
         except Exception as e:
             decky.logger.exception("download")
             return {"ok": False, "error": str(e)}
+        finally:
+            DOWNLOAD.clear()
+
+    async def get_download_status(self):
+        """Progress of the download in progress, for the panel's progress bar."""
+        d = dict(DOWNLOAD)
+        if not d:
+            return {"active": False}
+        try:
+            done = os.path.getsize(d["path"])
+        except OSError:
+            done = 0
+        return {"active": True, "tag": d.get("tag"), "bytes": done, "total": d.get("total"), "phase": d.get("phase")}
 
     async def delete_release(self, tag):
         try:

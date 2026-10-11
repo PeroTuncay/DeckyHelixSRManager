@@ -194,6 +194,8 @@ const setHelixDir = callable<[path: string], HelixState>("set_helix_dir");
 const listReleases = callable<[], Result & { offline: boolean; releases: Release[] }>("list_releases");
 const setActive = callable<[tag: string], Result>("set_active");
 const downloadRelease = callable<[tag: string], Result>("download_release");
+type DownloadStatus = { active: boolean; tag?: string; bytes?: number; total?: number | null; phase?: string };
+const getDownloadStatus = callable<[], DownloadStatus>("get_download_status");
 const deleteRelease = callable<[tag: string], Result>("delete_release");
 const startSetup = callable<[tag: string], Result>("start_setup");
 const cancelSetup = callable<[], boolean>("cancel_setup");
@@ -223,8 +225,8 @@ const mono: React.CSSProperties = {
 const STATUS: Record<Check["status"], { color: string; text: string }> = {
   running: { color: "#5ba32b", text: "HelixSR network running" },
   error: { color: "#d94126", text: "HelixSR loaded, but the network is NOT running" },
-  loaded: { color: "#e5a50a", text: "HelixSR loaded, no upscaling yet: select FSR in the game / FFX in OptiScaler" },
-  none: { color: "#8b929a", text: "Not loaded yet: start the game and select FSR" },
+  loaded: { color: "#e5a50a", text: "HelixSR loaded, no upscaling yet" },
+  none: { color: "#8b929a", text: "HelixSR not loaded yet" },
 };
 
 function toast(r: Result, title = "HelixSR") {
@@ -249,6 +251,24 @@ function store(key: string, value: string) {
 function notReady(a: Active) {
   if (!a.tag) return "Select a HelixSR release first";
   return a.version ? `Run the setup for ${a.tag} first` : `Download ${a.tag} first`;
+}
+
+const GREEN = "#5ba32b";
+const YELLOW = "#e5a50a";
+const RED = "#d94126";
+const GREY = "#8b929a";
+const mb = (b: number) => (b / 1048576).toFixed(1);
+
+// A switch whose state each viewer keeps (localStorage), e.g. "Show technical details".
+function useStoredFlag(key: string): [boolean, (v: boolean) => void] {
+  const [on, setOn] = useState(storage(key, "0") === "1");
+  return [
+    on,
+    (v: boolean) => {
+      setOn(v);
+      store(key, v ? "1" : "0");
+    },
+  ];
 }
 
 function Note({ children }: { children: React.ReactNode }) {
@@ -510,8 +530,46 @@ function SetupPanel({ s, refresh }: { s: SetupStatus; refresh: () => void }) {
           <div style={mono}>{(s.errors.length > 0 ? s.errors : s.tail.slice(-5)).join("\n")}</div>
         </PanelSectionRow>
       )}
-      {tools}
+      {s.state !== "succeeded" && tools}
     </>
+  );
+}
+
+function DownloadProgress({ tag }: { tag: string }) {
+  const [d, setD] = useState<DownloadStatus | null>(null);
+  useEffect(() => {
+    const poll = () => getDownloadStatus().then(setD);
+    poll();
+    const id = setInterval(poll, 700);
+    return () => clearInterval(id);
+  }, []);
+  const total = d?.total ?? 0;
+  const bytes = d?.bytes ?? 0;
+  const text =
+    d?.phase === "verifying"
+      ? "Checking the download (SHA256)…"
+      : d?.phase === "extracting"
+        ? "Unpacking…"
+        : total
+          ? `Downloading ${tag}: ${mb(bytes)} of ${mb(total)} MB`
+          : `Downloading ${tag}${bytes ? `: ${mb(bytes)} MB` : "…"}`;
+  return (
+    <PanelSectionRow>
+      <ProgressBarWithInfo
+        nProgress={total && d?.phase === "downloading" ? Math.min(100, (bytes / total) * 100) : 0}
+        indeterminate={!total || d?.phase !== "downloading"}
+        sOperationText={text}
+      />
+    </PanelSectionRow>
+  );
+}
+
+function Step({ n, done, current, children }: { n: number; done: boolean; current: boolean; children: React.ReactNode }) {
+  return (
+    <div style={{ display: "flex", gap: 6, marginTop: 3, color: done ? GREEN : current ? "#dcdedf" : GREY, fontWeight: current ? 600 : 400 }}>
+      <span style={{ width: 14, flexShrink: 0, textAlign: "center" }}>{done ? "✓" : n}</span>
+      <span>{children}</span>
+    </div>
   );
 }
 
@@ -519,6 +577,7 @@ function HelixSection({ state, refresh }: { state: HelixState | null; refresh: (
   const [busy, setBusy] = useState(false);
   const [releases, setReleases] = useState<Release[] | null>(null);
   const [offline, setOffline] = useState(false);
+  const [more, setMore] = useStoredFlag("moreOptions");
 
   const loadReleases = useCallback(async () => {
     const r = await listReleases();
@@ -553,13 +612,14 @@ function HelixSection({ state, refresh }: { state: HelixState | null; refresh: (
     if (tag === latest) parts.push("latest");
     if (releases?.find((r) => r.tag === tag)?.prerelease) parts.push("pre-release");
     if (isNgxRelease(tag, v)) parts.push("DLSS via OptiScaler");
-    parts.push(v ? (v.built ? "✓ ready" : "setup needed") : "not downloaded");
+    parts.push(v ? (v.built ? "✓ ready" : "needs building") : "not downloaded");
     return parts.join(" · ");
   };
 
   const tag = state.active;
   const rel = releases?.find((r) => r.tag === tag);
   const setupHere = setupRunning && state.setup.tag === tag;
+  const version = state.version ?? tag;
 
   const choose = async (t: string) => {
     await setActive(t);
@@ -594,11 +654,11 @@ function HelixSection({ state, refresh }: { state: HelixState | null; refresh: (
       <ConfirmModal
         strTitle={`Build HelixSR ${tag}`}
         strDescription={
-          "HelixSR's setup downloads NVIDIA's DLSS 310.7.0 DLL from NVIDIA's GitHub (NVIDIA's license applies), " +
-          "plus a portable Python with numpy and Microsoft's shader compiler, builds the network into the HelixSR DLL " +
-          "and deletes NVIDIA's DLL again. About 4-5 minutes on a desktop CPU, likely longer on the Deck. Keep the " +
-          "Deck plugged in and don't let it sleep (sleep pauses the setup); you can close this menu meanwhile. " +
-          "The resulting DLL contains NVIDIA's network: it is for this device only, don't share it."
+          "Takes about 7-10 minutes on a Steam Deck. Keep it plugged in and awake (sleep pauses the build); you can " +
+          "close this menu meanwhile, a notification tells you when it's done. HelixSR's setup downloads NVIDIA's " +
+          "DLSS DLL from NVIDIA's GitHub (NVIDIA's license applies), a portable Python and Microsoft's shader " +
+          "compiler, builds the network into the HelixSR DLL and deletes NVIDIA's DLL again. The result is for this " +
+          "device only, don't share it."
         }
         strOKButtonText="Download and build"
         onOK={async () => {
@@ -609,6 +669,8 @@ function HelixSection({ state, refresh }: { state: HelixState | null; refresh: (
       />,
     );
 
+  const step = !tag ? 0 : !state.downloaded ? 1 : !state.built ? 2 : 3;
+
   return (
     <PanelSection title="HelixSR">
       <PanelSectionRow>
@@ -616,107 +678,153 @@ function HelixSection({ state, refresh }: { state: HelixState | null; refresh: (
           <Field label="Loading releases from GitHub…" />
         ) : (
           <DropdownItem
-            label="Release to install"
+            label="Version"
             rgOptions={tags.map((t) => ({ data: t, label: label(t) }))}
             selectedOption={tag ?? undefined}
-            strDefaultLabel="Select a release"
-            disabled={setupRunning}
+            strDefaultLabel="Select a version"
+            disabled={setupRunning || busy}
             onChange={(o) => choose(o.data)}
           />
         )}
       </PanelSectionRow>
-      <Note>
-        {tag && (
-          <div style={{ color: state.built ? "#5ba32b" : "#e5a50a", fontWeight: 600 }}>
-            {state.built
-              ? `HelixSR ${state.version}: ready to install`
-              : state.downloaded
-                ? `HelixSR ${state.version}: run its setup before installing`
-                : `HelixSR ${tag}: not downloaded yet`}
-          </div>
-        )}
-        {rel?.published_at && <div>Published {new Date(rel.published_at).toLocaleDateString()}</div>}
-        {tag && local.get(tag)?.verified && <div>Download verified against GitHub's checksum (SHA256)</div>}
-        {tag && local.get(tag)?.replaced_upstream && (
-          <div style={{ color: "#e5a50a" }}>
-            The author has replaced this release's zip on GitHub since you downloaded it. Download it again (and run its
-            setup) to get the current files.
-          </div>
-        )}
-        {tag && versionAtLeast(local.get(tag)?.version ?? tag, 1, 7) && (
-          <div>
-            Since 1.7, HelixSR replaces FSR 3.1 again: through OptiScaler for DLSS games (select DLSS in the game), or
-            in place of a game's own FSR 3.1 (select AMD FSR). No launch option
-            {versionAtLeast(local.get(tag)?.version ?? tag, 1, 8) ? "; optional sharpening per game (1.8)" : ", no settings"}.
-            Run in Desktop Mode, HelixSR's own setup would also put its own OptiScaler into your games; the plugin only
-            builds the network and uses the OptiScaler you already have.
-          </div>
-        )}
-        {tag && isNgxRelease(tag, local.get(tag)) && (
-          <div>
-            Since 1.5, HelixSR runs as DLSS and only through OptiScaler (0.9.4). It needs a Steam launch option, which
-            the plugin can set per game. To replace a game's own FSR 3.1 directly, pick a 1.4 release.
-          </div>
-        )}
-        {latest && tag && tag !== latest && <div style={{ color: "#e5a50a" }}>Newer release available: {latest}</div>}
-        {offline && <div>GitHub not reachable: showing the last known releases.</div>}
-        <div>{state.base}</div>
-      </Note>
-      {tag && rel && !setupRunning && (
+      {tag && (
+        <Note>
+          <Step n={1} done={state.downloaded} current={step === 1}>
+            Download HelixSR {tag}
+          </Step>
+          <Step n={2} done={state.built} current={step === 2}>
+            Build it (setup, about 7-10 min on the Deck)
+          </Step>
+          <Step n={3} done={false} current={step === 3}>
+            Install it into a game: pick the game below
+          </Step>
+          {step === 3 && (
+            <div style={{ color: GREEN, marginTop: 4 }}>HelixSR {version} is ready to install.</div>
+          )}
+          {latest && tag !== latest && <div style={{ color: YELLOW, marginTop: 4 }}>Newer version available: {latest}</div>}
+          {local.get(tag)?.replaced_upstream && (
+            <div style={{ color: YELLOW, marginTop: 4 }}>
+              The author replaced this version's files on GitHub since you downloaded it. Download it again (More
+              options) and build it again to get the current files.
+            </div>
+          )}
+          {offline && <div style={{ marginTop: 4 }}>GitHub not reachable: showing the last known versions.</div>}
+        </Note>
+      )}
+      {busy && tag && <DownloadProgress tag={tag} />}
+      {step === 1 && rel && !busy && !setupRunning && (
         <PanelSectionRow>
-          <ButtonItem layout="below" disabled={busy} onClick={download}>
-            {busy ? "Downloading…" : state.downloaded ? `Download ${tag} again` : `Download ${tag}`}
+          <ButtonItem layout="below" onClick={download}>
+            Download HelixSR {tag}
           </ButtonItem>
         </PanelSectionRow>
       )}
-      {state.setup_script && !setupRunning && (
+      {step === 2 && state.setup_script && !setupRunning && !busy && (
         <PanelSectionRow>
-          <ButtonItem layout="below" disabled={busy} onClick={setup}>
-            {state.built ? "Run setup again" : "Run setup (build network)"}
+          <ButtonItem layout="below" onClick={setup}>
+            Build HelixSR {tag}
           </ButtonItem>
         </PanelSectionRow>
       )}
       <SetupPanel s={state.setup} refresh={refresh} />
-      {state.downloaded && tag !== "local" && !setupHere && (
-        <PanelSectionRow>
-          <ButtonItem layout="below" disabled={busy} onClick={remove}>
-            Delete {tag} from the Deck
-          </ButtonItem>
-        </PanelSectionRow>
-      )}
+      <Note>
+        Updating later: pick the newer version here, download and build it, then press "Switch to …" in each game. It
+        replaces the old version, no cleanup needed.
+      </Note>
       {!setupRunning && (
         <PanelSectionRow>
-          <ButtonItem layout="below" onClick={loadReleases}>
-            Check GitHub for releases
-          </ButtonItem>
+          <ToggleField label="More options" checked={more} onChange={setMore} />
         </PanelSectionRow>
       )}
-      {!setupRunning && (
-        <PanelSectionRow>
-          <ButtonItem layout="below" onClick={() => showModal(<CleanModal onDone={refresh} />)}>
-            Clean: remove all downloaded files
-          </ButtonItem>
-        </PanelSectionRow>
-      )}
-      {!setupRunning && (
-        <PanelSectionRow>
-          <ButtonItem
-            layout="below"
-            onClick={() =>
-              showModal(
-                <FolderModal
-                  initial={state.base}
-                  onSave={async (v) => {
-                    await setHelixDir(v);
-                    refresh();
-                  }}
-                />,
-              )
-            }
-          >
-            Change HelixSR folder
-          </ButtonItem>
-        </PanelSectionRow>
+      {more && !setupRunning && (
+        <>
+          <Note>
+            {tag && local.get(tag)?.verified && <div>Download verified against GitHub's checksum (SHA256).</div>}
+            {rel?.published_at && <div>Published {new Date(rel.published_at).toLocaleDateString()}</div>}
+            {tag && versionAtLeast(local.get(tag)?.version ?? tag, 1, 7) && (
+              <div>
+                Since 1.7, HelixSR replaces FSR 3.1: through OptiScaler (select DLSS in the game) or in place of a
+                game's own FSR 3.1 (select AMD FSR). The plugin only builds HelixSR and uses the OptiScaler you already
+                have; HelixSR's own setup in Desktop Mode would also install its own OptiScaler.
+              </div>
+            )}
+            {tag && isNgxRelease(tag, local.get(tag)) && (
+              <div>
+                1.5 and 1.6 run as DLSS, only through OptiScaler (0.9.4), and need a Steam launch option the plugin can
+                set per game. These versions were withdrawn by the author.
+              </div>
+            )}
+            <div>Stored in {state.base}</div>
+          </Note>
+          {tag && rel && state.downloaded && (
+            <PanelSectionRow>
+              <ButtonItem layout="below" disabled={busy} onClick={download}>
+                Download {tag} again
+              </ButtonItem>
+            </PanelSectionRow>
+          )}
+          {state.setup_script && state.built && (
+            <PanelSectionRow>
+              <ButtonItem layout="below" disabled={busy} onClick={setup}>
+                Build {tag} again
+              </ButtonItem>
+            </PanelSectionRow>
+          )}
+          {state.downloaded && tag !== "local" && !setupHere && (
+            <PanelSectionRow>
+              <ButtonItem layout="below" disabled={busy} onClick={remove}>
+                Delete {tag} from the Deck
+              </ButtonItem>
+            </PanelSectionRow>
+          )}
+          <PanelSectionRow>
+            <ButtonItem layout="below" onClick={loadReleases}>
+              Check GitHub for new versions
+            </ButtonItem>
+          </PanelSectionRow>
+          <PanelSectionRow>
+            <ButtonItem
+              layout="below"
+              description="Optional. Frees space on the Deck; games with HelixSR keep working."
+              onClick={() => showModal(<CleanModal onDone={refresh} />)}
+            >
+              Clean up downloads
+            </ButtonItem>
+          </PanelSectionRow>
+          <PanelSectionRow>
+            <ButtonItem layout="below" onClick={() => showModal(<LogModal />)}>
+              Show setup log
+            </ButtonItem>
+          </PanelSectionRow>
+          <PanelSectionRow>
+            <ButtonItem layout="below" onClick={() => showModal(<DiagnosticsModal />)}>
+              Run diagnostics
+            </ButtonItem>
+          </PanelSectionRow>
+          <PanelSectionRow>
+            <ButtonItem layout="below" onClick={async () => toast(await saveDebugReport(), "Debug report")}>
+              Save debug report
+            </ButtonItem>
+          </PanelSectionRow>
+          <PanelSectionRow>
+            <ButtonItem
+              layout="below"
+              onClick={() =>
+                showModal(
+                  <FolderModal
+                    initial={state.base}
+                    onSave={async (v) => {
+                      await setHelixDir(v);
+                      refresh();
+                    }}
+                  />,
+                )
+              }
+            >
+              Change HelixSR folder
+            </ButtonItem>
+          </PanelSectionRow>
+        </>
       )}
     </PanelSection>
   );
@@ -740,7 +848,7 @@ function sessionNote(check: Check, session?: Session): { color: string; text: st
     : { color: "#e5a50a", text: `The log is older than the last game session (${date(session.last_played)}): HelixSR wasn't used then.` };
 }
 
-function CheckBlock({ check, ini, session }: { check: Check; ini: IniValues; session?: Session }) {
+function CheckBlock({ check, ini, session, details }: { check: Check; ini: IniValues; session?: Session; details: boolean }) {
   const s = STATUS[check.status];
   const u = check.last_upscale;
   const fresh = sessionNote(check, session);
@@ -755,6 +863,7 @@ function CheckBlock({ check, ini, session }: { check: Check; ini: IniValues; ses
           </span>
         </Note>
       )}
+      {details && (
       <PanelSectionRow>
         <div style={small}>
           <span style={{ color: s.color, fontWeight: 600 }}>● {s.text}</span>
@@ -768,7 +877,8 @@ function CheckBlock({ check, ini, session }: { check: Check; ini: IniValues; ses
           )}
         </div>
       </PanelSectionRow>
-      {check.highlights.length > 0 && (
+      )}
+      {details && check.highlights.length > 0 && (
         <PanelSectionRow>
           <div style={mono}>{check.highlights.join("\n")}</div>
         </PanelSectionRow>
@@ -781,11 +891,13 @@ function IniControls({
   folder,
   ini,
   style,
+  details,
   onChange,
 }: {
   folder: string;
   ini: IniValues;
   style: SettingsStyle;
+  details: boolean;
   onChange: () => void;
 }) {
   const settingsFile = style === "legacy";
@@ -795,6 +907,7 @@ function IniControls({
   };
   return (
     <>
+      {(details || !ini.model_e_enabled) && (
       <PanelSectionRow>
         <ToggleField
           label="DLSS network (Model E)"
@@ -807,6 +920,7 @@ function IniControls({
           onChange={(on) => save("model_e", on ? "true" : "false")}
         />
       </PanelSectionRow>
+      )}
       {style === "sharpener" && (
         <>
           <PanelSectionRow>
@@ -869,12 +983,14 @@ function DirectSection({
   active,
   guard,
   session,
+  details,
   reload,
 }: {
   items: DirectTarget[];
   active: Active;
   guard: Guard;
   session: Session;
+  details: boolean;
   reload: () => void;
 }) {
   const [busy, setBusy] = useState<string | null>(null);
@@ -888,7 +1004,7 @@ function DirectSection({
   };
 
   return (
-    <PanelSection title="Replace the game's FSR 3.1">
+    <PanelSection title="In place of the game's FSR 3.1">
       {items.map((t) => {
         const installed = t.state === "helixsr";
         const differs = installed && !!active.version && t.helix_version !== active.version;
@@ -897,7 +1013,7 @@ function DirectSection({
             <Note>
               <div style={{ fontWeight: 600 }}>{t.rel}</div>
               <div>
-                {t.state === "original" && "Game's FSR DLL"}
+                {t.state === "original" && "The game's own FSR 3.1. Installing HelixSR here means: select AMD FSR in the game."}
                 {installed && `HelixSR ${t.helix_version ?? ""} installed`}
                 {t.state === "helixsr_no_backup" && "HelixSR without a backup of the game's file"}
                 {t.state === "conflict" && "A backup exists but this file is not HelixSR (game updated?)"}
@@ -952,11 +1068,12 @@ function DirectSection({
             )}
             {installed && (
               <>
-                <CheckBlock check={t.check} ini={t.ini} session={session} />
+                <CheckBlock check={t.check} ini={t.ini} session={session} details={details} />
                 <IniControls
                   folder={t.path.replace(/\/[^/]+$/, "")}
                   ini={t.ini}
                   style={settingsStyle("ffx", t.helix_version)}
+                  details={details}
                   onChange={reload}
                 />
               </>
@@ -1084,6 +1201,7 @@ function OptiItem({
   appid,
   guard,
   session,
+  details,
   reload,
 }: {
   o: OptiTarget;
@@ -1091,6 +1209,7 @@ function OptiItem({
   appid: string;
   guard: Guard;
   session: Session;
+  details: boolean;
   reload: () => void;
 }) {
   const [busy, setBusy] = useState(false);
@@ -1126,11 +1245,16 @@ function OptiItem({
               : `Uses HelixSR ${o.helix_version ?? ""}${o.kept_fsr4 ? " (FSR 4 selectable next to it)" : ""}`
             : installed
               ? "HelixSR folder present, but OptiScaler.ini no longer points to it (OptiScaler reinstalled?)"
-              : ngxActive
-                ? `Dx12Upscaler=${o.dx12_upscaler}, NvngxPath=${o.nvngx_path}`
-                : `Dx12Upscaler=${o.dx12_upscaler}, FfxDx12SRPath=${o.ffx_sr_path}`}
+              : "OptiScaler found. Installing HelixSR here means: select DLSS in the game (XeSS or FSR if DLSS isn't offered)."}
         </div>
-        {!o.configured && o.current_sr_dll && (
+        {details && !o.configured && !installed && (
+          <div>
+            {ngxActive
+              ? `Dx12Upscaler=${o.dx12_upscaler}, NvngxPath=${o.nvngx_path}`
+              : `Dx12Upscaler=${o.dx12_upscaler}, FfxDx12SRPath=${o.ffx_sr_path}`}
+          </div>
+        )}
+        {details && !o.configured && o.current_sr_dll && (
           <div>Current FSR upscaler DLL: {o.current_sr_dll.path.split("/").slice(-2).join("/")} ({sizeMb} MB)</div>
         )}
         {ngxActive && !o.configured && (
@@ -1171,7 +1295,7 @@ function OptiItem({
             {active.ready
               ? installed
                 ? `Point OptiScaler at HelixSR ${active.version} again`
-                : `Use HelixSR ${active.version} in OptiScaler${ngxActive ? " (as DLSS)" : ""}`
+                : `Install HelixSR ${active.version} via OptiScaler${ngxActive ? " (as DLSS)" : ""}`
               : notReady(active)}
           </ButtonItem>
         </PanelSectionRow>
@@ -1201,9 +1325,9 @@ function OptiItem({
         </PanelSectionRow>
       )}
       <LaunchOptionControl appid={appid} needed={installed === "ngx"} />
-      {o.hints.length > 0 && (
+      {o.hints.some((h) => details || h.level === "warn") && (
         <Note>
-          {o.hints.map((h) => (
+          {o.hints.filter((h) => details || h.level === "warn").map((h) => (
             <div key={h.text} style={{ color: h.level === "warn" ? "#e5a50a" : undefined, marginTop: 2 }}>
               {h.level === "warn" ? "⚠ " : "ⓘ "}
               {h.text}
@@ -1221,12 +1345,13 @@ function OptiItem({
               </span>
             </Note>
           )}
-          <CheckBlock check={o.check} ini={o.ini} session={session} />
+          <CheckBlock check={o.check} ini={o.ini} session={session} details={details} />
           <Note>
             {installed === "ngx"
-              ? "In the game, select DLSS as the upscaler. OptiScaler's menu then shows DLSS; switch to FSR there to compare live. A red frame around the picture means the network isn't built."
-              : 'In game, select DLSS (or FSR in games without DLSS), then open the OptiScaler menu: Upscalers → FFX Upscaler should read "FSR HelixSR (3.1.5)". A red frame around the picture means the network isn\'t built.'}
+              ? "To compare live: OptiScaler's menu shows DLSS as the upscaler (that's HelixSR); switch to FSR there and back."
+              : 'To compare live: in OptiScaler\'s menu, Upscalers → FFX Upscaler reads "FSR HelixSR (3.1.5)" when HelixSR is used; switch to XeSS or FSR 4 there and back. A red frame around the picture means HelixSR has no network (build it again).'}
           </Note>
+          {details && (
           <PanelSectionRow>
             <ToggleField
               label="OptiScaler log file"
@@ -1236,7 +1361,8 @@ function OptiItem({
               onChange={(on) => run(() => setOptiLogging(o.dir, on))}
             />
           </PanelSectionRow>
-          {o.opti_log.exists && (
+          )}
+          {details && o.opti_log.exists && (
             <PanelSectionRow>
               <div style={mono}>
                 {o.opti_log.lines.length > 0
@@ -1249,6 +1375,7 @@ function OptiItem({
             folder={o.helix_folder}
             ini={o.ini}
             style={settingsStyle(installed, o.helix_version)}
+            details={details}
             onChange={reload}
           />
         </>
@@ -1257,9 +1384,80 @@ function OptiItem({
   );
 }
 
+type Install = { how: "direct" | "opti" | "dlss"; version: string | null; check: Check };
+
+// Whether a helixsr.log belongs to the current/last game session ("unknown" without session data).
+function freshness(check: Check, session: Session): "current" | "last" | "stale" | "unknown" {
+  if (session.running && session.started) return check.mtime && check.mtime >= session.started ? "current" : "stale";
+  if (!session.running && session.last_played) return check.mtime && check.mtime >= session.last_played - 60 ? "last" : "stale";
+  return "unknown";
+}
+
+const SELECT_TEXT: Record<Install["how"], string> = {
+  direct: "select AMD FSR as the upscaler in the game",
+  opti: "select DLSS as the upscaler in the game (XeSS or FSR if the game doesn't offer DLSS)",
+  dlss: "select DLSS as the upscaler in the game",
+};
+
+// One line per game: is HelixSR installed here, and did it actually upscale? Built from the install state, helixsr.log
+// and the game's session times.
+function gameStatus(game: GameDetail, active: Active): { color: string; title: string; detail: string; extra?: string } {
+  const installs: Install[] = [
+    ...game.direct
+      .filter((t) => t.state === "helixsr" || t.state === "helixsr_no_backup")
+      .map((t) => ({ how: "direct" as const, version: t.helix_version, check: t.check })),
+    ...game.optiscaler
+      .filter((o) => o.configured && !o.disabled)
+      .map((o) => ({ how: "opti" as const, version: o.helix_version, check: o.check })),
+    ...game.official_dlss.map((d) => ({ how: "dlss" as const, version: d.helix_version, check: d.check })),
+  ];
+  if (installs.length === 0) {
+    if (game.direct.some((t) => t.state === "disabled") || game.optiscaler.some((o) => o.disabled)) {
+      return { color: GREY, title: "HelixSR is disabled in this game", detail: 'The game uses its previous upscaler. "Enable HelixSR again" below switches back.' };
+    }
+    if (!active.ready) {
+      return { color: GREY, title: "HelixSR isn't installed in this game", detail: "First download and build HelixSR (steps 1 and 2 above), then install it here." };
+    }
+    const where = game.optiscaler.length > 0
+      ? `"Install HelixSR ${active.version} via OptiScaler" in the OptiScaler section`
+      : `"Install HelixSR ${active.version} here"`;
+    return { color: GREY, title: "HelixSR isn't installed in this game", detail: `Install it below: ${where}.` };
+  }
+  // the install the game used last (newest log), else the first
+  const i = [...installs].sort((a, b) => (b.check.mtime ?? 0) - (a.check.mtime ?? 0))[0];
+  const v = i.version ? `HelixSR ${i.version}` : "HelixSR";
+  const pick = SELECT_TEXT[i.how];
+  const extra =
+    active.ready && active.version && i.version && i.version !== active.version
+      ? `This game has ${v}; ${active.version} is selected above. "Switch to HelixSR ${active.version}" below replaces it, no cleanup needed.`
+      : undefined;
+  const fresh = freshness(i.check, game.session);
+  const u = i.check.last_upscale;
+  if (i.check.status === "error") {
+    return { color: RED, title: "Installed, but HelixSR can't upscale", detail: `${v} here has no built network (red frame in the game). Build HelixSR above, then install it here again.`, extra };
+  }
+  if (i.check.status === "running" && fresh !== "stale") {
+    const when = fresh === "current" ? "in the current game session" : fresh === "last" ? "in the last game session" : "";
+    return { color: GREEN, title: "✓ Working", detail: `${v} upscaled ${when}${u ? `: ${u.render} → ${u.output} (${u.mode})` : ""}.`, extra };
+  }
+  if (i.check.status === "running") {
+    return { color: YELLOW, title: "Installed, but not used last time", detail: `${v} worked before, but not in the last game session. In the game, ${pick}.`, extra };
+  }
+  if (i.check.status === "loaded") {
+    return { color: YELLOW, title: "Installed, waiting for the game", detail: `${v} was loaded, but the game didn't ask it to upscale. In the game, ${pick}.`, extra };
+  }
+  return {
+    color: "#dcdedf",
+    title: `${v} installed, not used yet`,
+    detail: `Start the game, ${pick}, play a few seconds, then come back and press "Check again".`,
+    extra,
+  };
+}
+
 function GameSection({ appid, active }: { appid: string; active: Active }) {
   const [game, setGame] = useState<GameDetail | null>(null);
   const [loading, setLoading] = useState(false);
+  const [details, setDetails] = useStoredFlag("details");
 
   const reload = useCallback(async () => {
     setLoading(true);
@@ -1280,12 +1478,33 @@ function GameSection({ appid, active }: { appid: string; active: Active }) {
     remove: removeBlock,
     install: removeBlock || (game.anticheat.length > 0 && !game.anticheat_ack ? "anticheat" : null),
   };
-  const relevant = game.direct.length > 0 || game.optiscaler.length > 0;
+  const relevant = game.direct.length > 0 || game.optiscaler.length > 0 || game.official_dlss.length > 0;
+  const status = relevant ? gameStatus(game, active) : null;
 
   return (
     <>
-      {relevant && (game.running.length > 0 || game.steam_busy || game.anticheat.length > 0) && (
+      {status && (
         <PanelSection title={game.name}>
+          <PanelSectionRow>
+            <div style={{ ...small, color: "#dcdedf" }}>
+              <div style={{ fontSize: 15, fontWeight: 700, color: status.color, marginBottom: 2 }}>{status.title}</div>
+              <div>{status.detail}</div>
+              {status.extra && <div style={{ color: YELLOW, marginTop: 4 }}>{status.extra}</div>}
+            </div>
+          </PanelSectionRow>
+          <PanelSectionRow>
+            <ButtonItem layout="below" disabled={loading} onClick={reload}>
+              {loading ? "Checking…" : "Check again"}
+            </ButtonItem>
+          </PanelSectionRow>
+          <PanelSectionRow>
+            <ToggleField
+              label="Show technical details"
+              description="Logs, paths and OptiScaler settings."
+              checked={details}
+              onChange={setDetails}
+            />
+          </PanelSectionRow>
           {game.running.length > 0 && (
             <Note>
               <span style={{ color: "#d94126", fontWeight: 600 }}>
@@ -1323,7 +1542,7 @@ function GameSection({ appid, active }: { appid: string; active: Active }) {
           )}
         </PanelSection>
       )}
-      {game.direct.length === 0 && game.optiscaler.length === 0 && (
+      {!relevant && (
         <PanelSection title={game.name}>
           <Note>
             No FSR 3.1 DLL (amd_fidelityfx_upscaler_dx12.dll / amd_fidelityfx_dx12.dll) and no OptiScaler.ini found in
@@ -1343,26 +1562,19 @@ function GameSection({ appid, active }: { appid: string; active: Active }) {
                   in Desktop Mode and answer r for this game. Don't use it in online games (ban risk).
                 </div>
               </Note>
-              <CheckBlock check={d.check} ini={{ exists: false, network_resolution: "auto", sharpening: "off", upscaler_dll: "", model_e_enabled: true, network_resolutions: [], sharpener: "off", sharpness: "0.5" }} session={game.session} />
+              <CheckBlock check={d.check} ini={{ exists: false, network_resolution: "auto", sharpening: "off", upscaler_dll: "", model_e_enabled: true, network_resolutions: [], sharpener: "off", sharpness: "0.5" }} session={game.session} details={details} />
             </div>
           ))}
         </PanelSection>
       )}
-      <DirectSection items={game.direct} active={active} guard={guard} session={game.session} reload={reload} />
+      <DirectSection items={game.direct} active={active} guard={guard} session={game.session} details={details} reload={reload} />
       {game.optiscaler.length > 0 && (
         <PanelSection title="OptiScaler">
           {game.optiscaler.map((o) => (
-            <OptiItem key={o.dir} o={o} active={active} appid={game.appid} guard={guard} session={game.session} reload={reload} />
+            <OptiItem key={o.dir} o={o} active={active} appid={game.appid} guard={guard} session={game.session} details={details} reload={reload} />
           ))}
         </PanelSection>
       )}
-      <PanelSection>
-        <PanelSectionRow>
-          <ButtonItem layout="below" disabled={loading} onClick={reload}>
-            {loading ? "Checking…" : "Check again"}
-          </ButtonItem>
-        </PanelSectionRow>
-      </PanelSection>
     </>
   );
 }
