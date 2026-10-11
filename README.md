@@ -199,11 +199,6 @@ npm run package     # -> out/HelixSR-Manager.zip
 - Direct3D 12 only. Vulkan games aren't supported by HelixSR.
 - Close the game before installing or reverting.
 
-## License
-
-Public domain ([The Unlicense](LICENSE)): copy, change and use it however you like. The install logic follows
-HelixSR's Apache-2.0 installer script; see [LICENSE](LICENSE) for the notes on HelixSR and NVIDIA's files.
-
 ## Known game issues
 
 These are fixes outside the plugin: it doesn't change game files beyond installing HelixSR. Apply them at your own
@@ -238,3 +233,8 @@ With Wine hidden, the game also changes how it uses DirectX 12, so it depends on
 
 If the game doesn't start after the fix, restore the original exe and try another Proton version. proton-cachyos
 "Wineland" 11.0-20260930 or newer hides Wine for this game by itself, without changing the exe.
+
+## License
+
+Public domain ([The Unlicense](LICENSE)): copy, change and use it however you like. The install logic follows
+HelixSR's Apache-2.0 installer script; see [LICENSE](LICENSE) for the notes on HelixSR and NVIDIA's files.
