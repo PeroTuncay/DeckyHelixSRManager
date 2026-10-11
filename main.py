@@ -829,10 +829,12 @@ def opti_hints(text, dxgi_quirk=False):
         hints.append({"level": "warn", "text": "GPU spoofing is off (Dxgi = false): many games hide DLSS on an AMD GPU. "
                                                "Set it to auto ([Spoofing]); FSR / XeSS in the game also work, but can shimmer more."})
     elif get("Spoofing", "Dxgi") == "auto" and dxgi_quirk:
+        # Dxgi = true isn't suggested: in Witcher 3 (the known case) the spoofing hook then fails, and the real block
+        # was the game's own Wine check
         hints.append({"level": "warn", "text": "OptiScaler turns GPU spoofing off for this game (its own quirk, see "
-                                               "OptiScaler.log), so the game may hide DLSS on the Deck. To try DLSS, set "
-                                               "Dxgi = true ([Spoofing]); set it back to auto if the game misbehaves. "
-                                               "FSR / XeSS in the game also work, but can shimmer more."})
+                                               "OptiScaler.log), so the game may not offer DLSS. Some games also refuse "
+                                               "DLSS under Proton for other reasons. FSR / XeSS in the game work too, "
+                                               "but can shimmer more."})
     overlays = get("Hotfix", "DisableOverlays")
     optifg = get("FrameGen", "Enabled") == "true" and get("FrameGen", "FGInput") == "upscaler"
     if overlays == "true" or (overlays == "auto" and optifg):
