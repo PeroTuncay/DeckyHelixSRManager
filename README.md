@@ -12,7 +12,8 @@ integration, not affiliated with HelixSR, NVIDIA, AMD, OptiScaler or Decky.
 [Installation](#installation) · [Check that it runs](#4-check-that-it-runs) ·
 [Report a problem](https://github.com/PeroTuncay/DeckyHelixSRManager/issues/new)
 
-Tested on a Steam Deck OLED with The Witcher 3 (DirectX 12) through OptiScaler.
+Tested on a Steam Deck OLED (SteamOS) and an ASUS ROG Ally Z1 Extreme (Bazzite) with The Witcher 3 (DirectX 12) through
+OptiScaler.
 
 ## Features
 
