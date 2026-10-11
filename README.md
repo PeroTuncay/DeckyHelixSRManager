@@ -134,6 +134,41 @@ live side-by-side comparison, switch between "FSR HelixSR (3.1.5)" and FSR 3.1.5
 - **Undo completely:** **Revert OptiScaler to previous upscaler** or **Restore the game's FSR** (plus **Remove HelixSR
   launch option** for 1.5.x). The game's original files and settings come back as they were.
 
+## Known game issues
+
+These are fixes outside the plugin: it doesn't change game files beyond installing HelixSR. Apply them at your own
+risk and only for offline play.
+
+### The Witcher 3: "DLSS not supported" under Proton
+
+The game (5.0, DirectX 12) refuses DLSS when it detects Wine: it looks for `wine_get_version` and then never starts
+NVIDIA Streamline. OptiScaler's GPU spoofing doesn't help. Without DLSS, select XeSS or FSR in the game; HelixSR works
+through those too, but they can shimmer more.
+
+The fix renames that text in `witcher3.exe` ([source](https://gist.github.com/gabrielmaialva33/33ebb2542f0513d55100b22aa2149ff5)).
+With the game closed, in Desktop Mode (Konsole):
+
+```sh
+cd "$HOME/.local/share/Steam/steamapps/common/The Witcher 3/bin/x64_dx12"   # or the game's folder on another drive
+grep -a -c wine_get_version witcher3.exe                       # 2 = needs the fix, 0 = already patched
+cp -p witcher3.exe witcher3.exe.orig                           # backup
+sed -i 's/wine_get_version/frog_get_version/' witcher3.exe
+cmp -l witcher3.exe.orig witcher3.exe | wc -l                  # must print 8; otherwise restore the backup
+```
+
+Then select DLSS in the game and HelixSR 3.1.5 in OptiScaler's menu (FSR 3.X/4). A game update or Steam's "Verify
+integrity of game files" restores the original exe, so repeat it after either. To undo: `mv witcher3.exe.orig witcher3.exe`.
+
+With Wine hidden, the game also changes how it uses DirectX 12, so it depends on the device and Proton version:
+
+| Device | Works with |
+|---|---|
+| Steam Deck OLED (SteamOS) | Proton 11.0-2e |
+| ROG Ally Z1 Extreme (Bazzite, Mesa 25.2) | Proton Experimental 11.0-20261001 plus `VKD3D_CONFIG=nodxr` in the launch options (turns off the game's ray tracing). On 11.0-2e it crashes at startup. |
+
+If the game doesn't start after the fix, restore the original exe and try another Proton version. proton-cachyos
+"Wineland" 11.0-20260930 or newer hides Wine for this game by itself, without changing the exe.
+
 ## What it does
 
 1. **HelixSR release**: a dropdown of every release on
