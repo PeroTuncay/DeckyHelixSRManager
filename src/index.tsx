@@ -1563,8 +1563,8 @@ function GameSection({ appid, active }: { appid: string; active: Active }) {
     reload();
   }, [reload]);
 
-  if (!game) return <PanelSection title="Game"><Note>Scanning…</Note></PanelSection>;
-  if (!game.ok) return <PanelSection title="Game"><Note>{game.error}</Note></PanelSection>;
+  if (!game) return <PanelSection title="Game Configuration"><Note>Scanning…</Note></PanelSection>;
+  if (!game.ok) return <PanelSection title="Game Configuration"><Note>{game.error}</Note></PanelSection>;
 
   const removeBlock = game.running.length > 0 ? "running" : game.steam_busy;
   const guard: Guard = {
@@ -1719,7 +1719,7 @@ function Content() {
   return (
     <>
       <HelixSection state={helix} refresh={refreshHelix} />
-      <PanelSection title="Game">
+      <PanelSection title="Game Configuration">
         <PanelSectionRow>
           <ToggleField
             label="Only FSR 3.1 / OptiScaler games"

@@ -83,7 +83,7 @@ replaces the old version in that game; no cleanup is needed first.
 
 ### 3. Install HelixSR into a game
 
-Pick the game under **Game** (the list shows games with an FSR 3.1 DLL or OptiScaler; turn off the filter to see all).
+Pick the game under **Game Configuration** (the list shows games with an FSR 3.1 DLL or OptiScaler; turn off the filter to see all).
 Close the game first: the plugin refuses to change its files while it runs or while Steam is still installing or
 updating it. If the game ships anti-cheat (EasyAntiCheat, BattlEye, …), the plugin warns that online play could get
 your account banned and only installs after you turn on **I understand the risk** for that game.
