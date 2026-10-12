@@ -261,8 +261,8 @@ const GREY = "#8b929a";
 const mb = (b: number) => (b / 1048576).toFixed(1);
 
 // A switch whose state each viewer keeps (localStorage), e.g. "Show technical details".
-function useStoredFlag(key: string): [boolean, (v: boolean) => void] {
-  const [on, setOn] = useState(storage(key, "0") === "1");
+function useStoredFlag(key: string, fallback = false): [boolean, (v: boolean) => void] {
+  const [on, setOn] = useState(storage(key, fallback ? "1" : "0") === "1");
   return [
     on,
     (v: boolean) => {
@@ -270,6 +270,50 @@ function useStoredFlag(key: string): [boolean, (v: boolean) => void] {
       store(key, v ? "1" : "0");
     },
   ];
+}
+
+// A panel section that folds away: the header toggles it (A button or touch), the open state is kept per viewer, and a
+// short summary shows while it's closed so nothing important is hidden without a trace.
+function Accordion({
+  id,
+  title,
+  summary,
+  defaultOpen = false,
+  children,
+}: {
+  id: string;
+  title: string;
+  summary?: React.ReactNode;
+  defaultOpen?: boolean;
+  children: React.ReactNode;
+}) {
+  const [open, setOpen] = useStoredFlag(`open:${id}`, defaultOpen);
+  const [focused, setFocused] = useState(false);
+  const toggle = () => setOpen(!open);
+  return (
+    <PanelSection>
+      <PanelSectionRow>
+        <Focusable
+          onActivate={toggle}
+          onClick={toggle}
+          onGamepadFocus={() => setFocused(true)}
+          onGamepadBlur={() => setFocused(false)}
+          style={{
+            display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, cursor: "pointer",
+            padding: "6px 8px", margin: "0 -8px", borderRadius: 3,
+            background: focused ? "rgba(255,255,255,0.12)" : "transparent",
+          }}
+        >
+          <div className={staticClasses.PanelSectionTitle} style={{ margin: 0, padding: 0 }}>
+            {title}
+          </div>
+          <span style={{ fontSize: 12, color: "#b8bcbf" }}>{open ? "▾" : "▸"}</span>
+        </Focusable>
+      </PanelSectionRow>
+      {!open && summary && <Note>{summary}</Note>}
+      {open && children}
+    </PanelSection>
+  );
 }
 
 function Note({ children }: { children: React.ReactNode }) {
@@ -597,7 +641,7 @@ function HelixSection({ state, refresh }: { state: HelixState | null; refresh: (
     return () => clearInterval(id);
   }, [setupRunning, refresh]);
 
-  if (!state) return <PanelSection title="HelixSR"><Note>Loading…</Note></PanelSection>;
+  if (!state) return <PanelSection title="HelixSR Installation"><Note>Loading…</Note></PanelSection>;
 
   const latest = releases?.find((r) => !r.prerelease)?.tag;
   const local = new Map(state.versions.map((v) => [v.tag, v]));
@@ -671,9 +715,20 @@ function HelixSection({ state, refresh }: { state: HelixState | null; refresh: (
     );
 
   const step = !tag ? 0 : !state.downloaded ? 1 : !state.built ? 2 : 3;
+  const summary = setupRunning
+    ? `Building HelixSR ${state.setup.tag ?? ""}… ${Math.round(state.setup.progress)}%`
+    : busy
+      ? `Downloading HelixSR ${tag}…`
+      : step === 0
+        ? "No version selected"
+        : step === 1
+          ? `HelixSR ${tag}: download it next`
+          : step === 2
+            ? `HelixSR ${tag}: build it next`
+            : `HelixSR ${version} ready to install`;
 
   return (
-    <PanelSection title="HelixSR">
+    <Accordion id="install" title="HelixSR Installation" defaultOpen summary={summary}>
       <PanelSectionRow>
         {releases === null && tags.length === 0 ? (
           <Field label="Loading releases from GitHub…" />
@@ -827,7 +882,7 @@ function HelixSection({ state, refresh }: { state: HelixState | null; refresh: (
           </PanelSectionRow>
         </>
       )}
-    </PanelSection>
+    </Accordion>
   );
 }
 
@@ -1004,8 +1059,21 @@ function DirectSection({
     reload();
   };
 
+  const summary = items
+    .map((t) =>
+      t.state === "helixsr" || t.state === "helixsr_no_backup"
+        ? `HelixSR ${t.helix_version ?? ""} installed`
+        : t.state === "disabled"
+          ? "HelixSR disabled"
+          : t.state === "conflict"
+            ? "Needs attention (game updated?)"
+            : "HelixSR not installed",
+    )
+    .filter((v, i, all) => all.indexOf(v) === i)
+    .join(" · ");
+
   return (
-    <PanelSection title="In place of the game's FSR 3.1">
+    <Accordion id="direct" title="In place of the game's FSR 3.1" summary={summary}>
       {items.map((t) => {
         const installed = t.state === "helixsr";
         const differs = installed && !!active.version && t.helix_version !== active.version;
@@ -1082,7 +1150,7 @@ function DirectSection({
           </div>
         );
       })}
-    </PanelSection>
+    </Accordion>
   );
 }
 
@@ -1387,6 +1455,30 @@ function OptiItem({
 
 type Install = { how: "direct" | "opti" | "dlss"; version: string | null; check: Check };
 
+// What the closed OptiScaler section says: HelixSR's state there, plus how many warnings it holds.
+function optiSummary(items: OptiTarget[]) {
+  const states = items
+    .map((o) =>
+      o.installed_kind === "official"
+        ? `HelixSR ${o.helix_version ?? ""} (installed by HelixSR's setup)`
+        : o.disabled
+          ? "HelixSR disabled"
+          : o.configured
+            ? `HelixSR ${o.helix_version ?? ""} in use`
+            : o.installed_kind
+              ? "Needs attention (OptiScaler reinstalled?)"
+              : "HelixSR not installed",
+    )
+    .filter((v, i, all) => all.indexOf(v) === i);
+  const warnings = items.reduce((n, o) => n + o.hints.filter((h) => h.level === "warn").length, 0);
+  return (
+    <>
+      {states.join(" · ")}
+      {warnings > 0 && <span style={{ color: YELLOW }}> · ⚠ {warnings === 1 ? "1 warning" : `${warnings} warnings`} inside</span>}
+    </>
+  );
+}
+
 // Whether a helixsr.log belongs to the current/last game session ("unknown" without session data).
 function freshness(check: Check, session: Session): "current" | "last" | "stale" | "unknown" {
   if (session.running && session.started) return check.mtime && check.mtime >= session.started ? "current" : "stale";
@@ -1420,9 +1512,9 @@ function gameStatus(game: GameDetail, active: Active): { color: string; title: s
       return { color: GREY, title: "HelixSR isn't installed in this game", detail: "First download and build HelixSR (steps 1 and 2 above), then install it here." };
     }
     const where = game.optiscaler.length > 0
-      ? `"Install HelixSR ${active.version} via OptiScaler" in the OptiScaler section`
-      : `"Install HelixSR ${active.version} here"`;
-    return { color: GREY, title: "HelixSR isn't installed in this game", detail: `Install it below: ${where}.` };
+      ? `open the OptiScaler section and press "Install HelixSR ${active.version} via OptiScaler"`
+      : `open "In place of the game's FSR 3.1" and press "Install HelixSR ${active.version} here"`;
+    return { color: GREY, title: "HelixSR isn't installed in this game", detail: `To install it, ${where} below.` };
   }
   // the install the game used last (newest log), else the first
   const i = [...installs].sort((a, b) => (b.check.mtime ?? 0) - (a.check.mtime ?? 0))[0];
@@ -1552,7 +1644,11 @@ function GameSection({ appid, active }: { appid: string; active: Active }) {
         </PanelSection>
       )}
       {game.official_dlss.length > 0 && (
-        <PanelSection title="Installed by HelixSR's setup">
+        <Accordion
+          id="official"
+          title="Installed by HelixSR's setup"
+          summary={`HelixSR ${game.official_dlss[0].helix_version ?? ""} as the game's DLSS (managed by HelixSR's setup)`}
+        >
           {game.official_dlss.map((d) => (
             <div key={d.dir}>
               <Note>
@@ -1566,15 +1662,15 @@ function GameSection({ appid, active }: { appid: string; active: Active }) {
               <CheckBlock check={d.check} ini={{ exists: false, network_resolution: "auto", sharpening: "off", upscaler_dll: "", model_e_enabled: true, network_resolutions: [], sharpener: "off", sharpness: "0.5" }} session={game.session} details={details} />
             </div>
           ))}
-        </PanelSection>
+        </Accordion>
       )}
       <DirectSection items={game.direct} active={active} guard={guard} session={game.session} details={details} reload={reload} />
       {game.optiscaler.length > 0 && (
-        <PanelSection title="OptiScaler">
+        <Accordion id="optiscaler" title="OptiScaler" summary={optiSummary(game.optiscaler)}>
           {game.optiscaler.map((o) => (
             <OptiItem key={o.dir} o={o} active={active} appid={game.appid} guard={guard} session={game.session} details={details} reload={reload} />
           ))}
-        </PanelSection>
+        </Accordion>
       )}
     </>
   );

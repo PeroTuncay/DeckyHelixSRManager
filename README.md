@@ -31,6 +31,8 @@ OptiScaler.
   game session), shows OptiScaler settings that commonly get in the way (DLSS input off, Steam Input blocked, menu key),
   and has a network on/off switch to prove HelixSR is doing the upscaling.
 - **Settings per game** where the release supports them (sharpening in 1.8, network resolution up to 1.4).
+- **Less scrolling:** HelixSR Installation, OptiScaler and "In place of the game's FSR 3.1" fold away (tap the
+  header); a closed section shows a one-line summary, including warnings inside. Installation starts open.
 - **Technical details on demand:** logs, paths and OptiScaler settings stay behind **Show technical details**; rarely
   needed buttons (download again, delete, clean up, diagnostics, debug report) behind **More options**.
 - **Clean up (optional):** remove every downloaded release and the setup's downloads in one go. Not needed for updates.
@@ -62,7 +64,7 @@ Updating works the same way: install the newer zip over the old one.
 
 ### 2. Download and build HelixSR (once per release)
 
-The **HelixSR** section shows three numbered steps and only the button for the next one.
+The **HelixSR Installation** section shows three numbered steps and only the button for the next one.
 
 1. Pick a version under **Version** (the newest is marked *latest*).
 2. Press **Download HelixSR …**. A progress bar shows the download; the zip is checked against GitHub's SHA256 checksum
