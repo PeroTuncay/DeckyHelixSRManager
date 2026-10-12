@@ -7,7 +7,7 @@ import {
   ModalRoot,
   PanelSection,
   PanelSectionRow,
-  ProgressBarWithInfo,
+  ProgressBar,
   Spinner,
   TextField,
   ToggleField,
@@ -316,6 +316,22 @@ function Accordion({
   );
 }
 
+// A progress bar with its text above, aligned with the other rows. (ProgressBarWithInfo is a full list item with its
+// own padding; inside a PanelSectionRow it got indented twice and ran past the right edge.)
+function Progress({ percent, indeterminate, text, right }: { percent: number; indeterminate: boolean; text: string; right?: string }) {
+  return (
+    <PanelSectionRow>
+      <div style={{ width: "100%", boxSizing: "border-box" }}>
+        <div style={{ ...small, display: "flex", justifyContent: "space-between", gap: 8, marginBottom: 4 }}>
+          <span>{text}</span>
+          {right && <span style={{ flexShrink: 0 }}>{right}</span>}
+        </div>
+        <ProgressBar nProgress={percent} indeterminate={indeterminate} />
+      </div>
+    </PanelSectionRow>
+  );
+}
+
 function Note({ children }: { children: React.ReactNode }) {
   return (
     <PanelSectionRow>
@@ -492,14 +508,12 @@ function SetupPanel({ s, refresh }: { s: SetupStatus; refresh: () => void }) {
             <span>Setup {s.tag ?? ""} running{s.adopted ? " (started outside this plugin version)" : ""}</span>
           </div>
         </PanelSectionRow>
-        <PanelSectionRow>
-          <ProgressBarWithInfo
-            nProgress={s.progress}
-            indeterminate={s.progress === 0}
-            sOperationText={s.phase}
-            sTimeRemaining={elapsed !== null ? `${duration(elapsed)} elapsed` : undefined}
-          />
-        </PanelSectionRow>
+        <Progress
+          percent={s.progress}
+          indeterminate={s.progress === 0}
+          text={s.phase}
+          right={elapsed !== null ? `${duration(elapsed)} elapsed` : undefined}
+        />
         <Note>
           <div>
             Activity:{" "}
@@ -599,13 +613,11 @@ function DownloadProgress({ tag }: { tag: string }) {
           ? `Downloading ${tag}: ${mb(bytes)} of ${mb(total)} MB`
           : `Downloading ${tag}${bytes ? `: ${mb(bytes)} MB` : "…"}`;
   return (
-    <PanelSectionRow>
-      <ProgressBarWithInfo
-        nProgress={total && d?.phase === "downloading" ? Math.min(100, (bytes / total) * 100) : 0}
-        indeterminate={!total || d?.phase !== "downloading"}
-        sOperationText={text}
-      />
-    </PanelSectionRow>
+    <Progress
+      percent={total && d?.phase === "downloading" ? Math.min(100, (bytes / total) * 100) : 0}
+      indeterminate={!total || d?.phase !== "downloading"}
+      text={text}
+    />
   );
 }
 
