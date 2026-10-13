@@ -39,6 +39,10 @@ SETUP_TMP = SETUP_DIR / "tmp"              # TMPDIR for the setup, so its work f
 DOWNLOAD = {}                               # the download in progress (tag, zip path, expected size, phase)
 
 RELEASES_API = "https://api.github.com/repos/lonewolf0622/HelixSR/releases?per_page=100"
+# this plugin's own releases, for its update check (latest = newest non-prerelease, non-draft)
+PLUGIN_RELEASES_API = "https://api.github.com/repos/PeroTuncay/DeckyHelixSRManager/releases/latest"
+PLUGIN_UPDATE_TTL = 6 * 3600   # seconds between automatic checks (GitHub allows 60 unauthenticated calls per hour)
+PLUGIN_UPDATE = {"checked": 0.0, "result": None}
 RELEASES_CACHE = Path(decky.DECKY_PLUGIN_SETTINGS_DIR) / "releases.json"
 LEGACY_TAG = "local"   # a release extracted straight into the base folder (plugin 0.1 layout)
 SEPARATE_FILES = ("helixsr_weights.bin", "helixsr_kernels.pak")   # the network before 1.4.0
@@ -840,6 +844,22 @@ def ini_defaults(folder):
         d[("sharpening", "sharpener")] = "nvidia"
         d[("sharpening", "sharpness")] = "0.1"
     return d
+
+
+def plugin_version():
+    """This plugin's installed version (Decky passes it; package.json next to main.py as a fallback)."""
+    v = getattr(decky, "DECKY_PLUGIN_VERSION", None)
+    if not v:
+        try:
+            v = json.loads((Path(__file__).parent / "package.json").read_text()).get("version")
+        except (OSError, ValueError):
+            v = None
+    return v or "0"
+
+
+def version_key(v):
+    """'0.9.1', 'v0.9.1' or a tag like 'v.0.8.3' -> (0, 9, 1) for comparing."""
+    return tuple(int(n) for n in re.findall(r"\d+", v or "")[:3]) or (0,)
 
 
 def ini_holds_only_defaults(text, defaults=None):
@@ -1699,6 +1719,33 @@ class Plugin:
         s.pop("active", None)
         save_settings(s)
         return await self.get_helix_state()
+
+    async def check_plugin_update(self, force=False):
+        """Whether a newer HelixSR Manager release exists on GitHub. The panel then hands its zip to Decky's own
+        installer (utilities/install_plugin), which asks the user to confirm and checks the SHA256."""
+        cached = PLUGIN_UPDATE["result"]
+        if cached and not force and time.time() - PLUGIN_UPDATE["checked"] < PLUGIN_UPDATE_TTL:
+            return cached
+        current = plugin_version()
+        try:
+            rel = json.loads(await asyncio.to_thread(
+                run_curl, ["-H", "Accept: application/vnd.github+json", PLUGIN_RELEASES_API], 20))
+            asset = next((a for a in rel.get("assets", []) if a["name"].lower().endswith(".zip")), None)
+            latest = re.sub(r"^v\.?", "", rel.get("tag_name", ""))
+            if not asset or not latest:
+                raise RuntimeError("The latest release has no plugin zip.")
+            digest = asset.get("digest") or ""
+            result = {"ok": True, "current": current, "latest": latest,
+                      "newer": version_key(latest) > version_key(current),
+                      "url": asset["browser_download_url"],
+                      "sha256": digest.split(":", 1)[1] if digest.startswith("sha256:") else "",
+                      "page": rel.get("html_url", ""), "notes": (rel.get("body") or "")[:1500],
+                      "published_at": rel.get("published_at")}
+        except Exception as e:
+            decky.logger.warning(f"plugin update check: {e}")
+            return {"ok": False, "current": current, "error": "Couldn't reach GitHub to check for a plugin update."}
+        PLUGIN_UPDATE.update(checked=time.time(), result=result)
+        return result
 
     async def list_releases(self):
         """Releases from GitHub; on failure the last list fetched, flagged offline."""

@@ -199,6 +199,29 @@ type Session = { running: boolean; started: number | null; last_played: number |
 type Guard = { install: string | null; remove: string | null };
 
 const getHelixState = callable<[], HelixState>("get_helix_state");
+type PluginUpdate = {
+  ok: boolean;
+  current: string;
+  latest?: string;
+  newer?: boolean;
+  url?: string;
+  sha256?: string;
+  page?: string;
+  notes?: string;
+  published_at?: string | null;
+  error?: string;
+};
+const checkPluginUpdate = callable<[force: boolean], PluginUpdate>("check_plugin_update");
+
+// Decky Loader's own backend RPC (the same installer as its store and "Install Plugin from URL"): it shows Decky's
+// confirmation prompt, downloads the zip, checks the SHA256 and reloads the plugin.
+declare global {
+  interface Window {
+    DeckyBackend?: { callable?: (route: string) => (...args: unknown[]) => Promise<unknown> };
+  }
+}
+const PLUGIN_NAME = "HelixSR Manager"; // must equal plugin.json "name": Decky finds the installed plugin by it
+const INSTALL_TYPE_UPDATE = 2;
 const setAnticheatAck = callable<[appid: string, on: boolean], Result>("set_anticheat_ack");
 const setDisabled = callable<[path: string, disabled: boolean], Result>("set_disabled");
 const setHelixDir = callable<[path: string], HelixState>("set_helix_dir");
@@ -1738,6 +1761,85 @@ function GameSection({ appid, active }: { appid: string; active: Active }) {
   );
 }
 
+// --- plugin updates -------------------------------------------------------------------------------------------------
+
+async function installPluginUpdate(u: PluginUpdate) {
+  const install = window.DeckyBackend?.callable?.("utilities/install_plugin");
+  if (!install || !u.url || !u.latest) {
+    toaster.toast({
+      title: "Plugin update",
+      body: "Decky's installer isn't reachable from here. Download the zip from the release page and use Decky → Developer → Install Plugin from ZIP File.",
+    });
+    return;
+  }
+  try {
+    await install(u.url, PLUGIN_NAME, u.latest, u.sha256 ?? "", INSTALL_TYPE_UPDATE);
+  } catch (e) {
+    toaster.toast({ title: "Plugin update", body: `Decky couldn't start the update: ${e}` });
+  }
+}
+
+// "HelixSR Manager x.y.z is available": shown at the top only when a newer release exists (checked when the panel
+// opens, at most every few hours unless "Check now" is pressed).
+function PluginUpdateBanner({ update }: { update: PluginUpdate | null }) {
+  if (!update?.ok || !update.newer) return null;
+  return (
+    <PanelSection title="Plugin update">
+      <Note>
+        <div style={{ color: GREEN, fontWeight: 600 }}>HelixSR Manager {update.latest} is available</div>
+        <div>You have {update.current}. Decky asks you to confirm, then installs it and reloads the plugin.</div>
+      </Note>
+      <PanelSectionRow>
+        <ButtonItem layout="below" onClick={() => installPluginUpdate(update)}>
+          Update to {update.latest}
+        </ButtonItem>
+      </PanelSectionRow>
+    </PanelSection>
+  );
+}
+
+function AboutSection({ update, check }: { update: PluginUpdate | null; check: () => Promise<void> }) {
+  const [checking, setChecking] = useState(false);
+  return (
+    <Accordion
+      id="about"
+      title="About this plugin"
+      summary={update ? `HelixSR Manager ${update.current}${update.ok && update.newer ? ` · ${update.latest} available` : ""}` : undefined}
+    >
+      <Note>
+        <div>HelixSR Manager {update?.current ?? ""}</div>
+        {update && !update.ok && <div style={{ color: YELLOW }}>{update.error}</div>}
+        {update?.ok && (
+          <div style={{ color: update.newer ? GREEN : undefined }}>
+            {update.newer ? `Version ${update.latest} is available.` : `Up to date (latest release: ${update.latest}).`}
+          </div>
+        )}
+        <div>github.com/PeroTuncay/DeckyHelixSRManager</div>
+      </Note>
+      {update?.ok && update.newer && (
+        <PanelSectionRow>
+          <ButtonItem layout="below" onClick={() => installPluginUpdate(update)}>
+            Update to {update.latest}
+          </ButtonItem>
+        </PanelSectionRow>
+      )}
+      <PanelSectionRow>
+        <ButtonItem
+          layout="below"
+          disabled={checking}
+          onClick={async () => {
+            setChecking(true);
+            await check();
+            setChecking(false);
+          }}
+        >
+          {checking ? "Checking…" : "Check for plugin updates"}
+        </ButtonItem>
+      </PanelSectionRow>
+    </Accordion>
+  );
+}
+
 // --- main panel --------------------------------------------------------------------------------------------------------
 
 function Content() {
@@ -1746,6 +1848,7 @@ function Content() {
   const [onlyCompatible, setOnlyCompatible] = useState(storage("onlyCompatible", "1") === "1");
   const [selected, setSelected] = useState<string>(storage("selected", ""));
   const [scanning, setScanning] = useState(false);
+  const [update, setUpdate] = useState<PluginUpdate | null>(null);
 
   const refreshHelix = useCallback(() => {
     getHelixState().then(setHelix);
@@ -1755,6 +1858,10 @@ function Content() {
     setScanning(true);
     setGames(await listGames());
     setScanning(false);
+  }, []);
+
+  useEffect(() => {
+    checkPluginUpdate(false).then(setUpdate);
   }, []);
 
   useEffect(() => {
@@ -1780,6 +1887,7 @@ function Content() {
 
   return (
     <>
+      <PluginUpdateBanner update={update} />
       <HelixSection state={helix} refresh={refreshHelix} />
       <PanelSection title="Game Configuration">
         <PanelSectionRow>
@@ -1835,6 +1943,17 @@ function Content() {
           }}
         />
       )}
+      <AboutSection
+        update={update}
+        check={async () => {
+          const u = await checkPluginUpdate(true);
+          setUpdate(u);
+          toaster.toast({
+            title: "Plugin update",
+            body: !u.ok ? u.error ?? "Check failed" : u.newer ? `Version ${u.latest} is available.` : `Up to date (${u.current}).`,
+          });
+        }}
+      />
     </>
   );
 }

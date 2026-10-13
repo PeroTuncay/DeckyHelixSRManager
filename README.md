@@ -33,6 +33,8 @@ OptiScaler.
 - **Settings per game** where the release supports them (sharpening from 1.8, the int8 network from 1.9, network resolution up to 1.4).
 - **Less scrolling:** HelixSR Installation, OptiScaler and "In place of the game's FSR 3.1" fold away (tap the
   header); a closed section shows a one-line summary, including warnings inside. Installation starts open.
+- **Plugin updates from the panel:** a newer release shows up at the top with an **Update** button; Decky installs it
+  after you confirm.
 - **Technical details on demand:** logs, paths and OptiScaler settings stay behind **Show technical details**; rarely
   needed buttons (download again, delete, clean up, diagnostics, debug report) behind **More options**.
 - **Clean up (optional):** remove every downloaded release and the setup's downloads in one go. Not needed for updates.
@@ -60,7 +62,11 @@ OptiScaler.
    Alternatively, download the zip, copy it to the Deck and use **Install plugin from ZIP file**.
 3. Open the Quick Access menu (`···` button) → Decky → **HelixSR Manager**.
 
-Updating works the same way: install the newer zip over the old one.
+**Updating the plugin:** from 0.9.2 on, the plugin checks GitHub for a newer release when you open it (at most every
+few hours). When there is one, a **Plugin update** section appears at the top: press **Update to …**, confirm Decky's
+prompt, and Decky downloads the release, checks its SHA256 and reloads the plugin. **About this plugin** at the bottom
+shows the installed version and has **Check for plugin updates**. Versions before 0.9.2 update once by hand: install the
+newer zip over the old one, as above.
 
 ### 2. Download and build HelixSR (once per release)
 
