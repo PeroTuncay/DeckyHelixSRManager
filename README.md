@@ -30,7 +30,7 @@ OptiScaler.
 - **Did it apply?** Reads HelixSR's log (network running, render and output size, whether the log is from the last
   game session), shows OptiScaler settings that commonly get in the way (DLSS input off, Steam Input blocked, menu key),
   and has a network on/off switch to prove HelixSR is doing the upscaling.
-- **Settings per game** where the release supports them (sharpening in 1.8, network resolution up to 1.4).
+- **Settings per game** where the release supports them (sharpening from 1.8, the int8 network from 1.9, network resolution up to 1.4).
 - **Less scrolling:** HelixSR Installation, OptiScaler and "In place of the game's FSR 3.1" fold away (tap the
   header); a closed section shows a one-line summary, including warnings inside. Installation starts open.
 - **Technical details on demand:** logs, paths and OptiScaler settings stay behind **Show technical details**; rarely
@@ -128,8 +128,9 @@ live side-by-side comparison, switch between "FSR HelixSR (3.1.5)" and FSR 3.1.5
 
 ### 5. Settings, disable and undo
 
-- **Sharpening:** from 1.8, optional and off by default, as DLSS: **Sharpening** (NVIDIA's Image Sharpening or AMD's
-  RCAS) and **Sharpness** (0.5 = NVIDIA's default). Up to 1.4: the release's sharpening mode and network resolution.
+- **Sharpening:** **Sharpening** (NVIDIA's Image Sharpening or AMD's RCAS) and **Sharpness**. In 1.8 off by default,
+  as DLSS; from 1.9 HelixSR sharpens lightly by default (NVIDIA's filter at 0.1), and **Off** turns that off.
+- **Int8 network** (1.9+, experimental): Auto (on for RDNA 2 and newer), On or Off. Up to 1.4: the release's sharpening mode and network resolution.
   Changes take effect after restarting the game.
 - **Disable** switches the game back to its own FSR (or OptiScaler's previous upscaler) and keeps HelixSR's files;
   **Enable HelixSR again** switches back without downloading or building anything.

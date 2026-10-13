@@ -822,9 +822,31 @@ def opti_log_check(opti_dir):
     return {"exists": True, "path": str(log), "mtime": info["mtime"], "lines": lines[-15:], "not_nvidia": not_nvidia}
 
 
-def ini_holds_only_defaults(text):
-    """True when a helixsr.ini sets nothing but HelixSR's defaults (INI_DEFAULTS), e.g. one the plugin created for a
-    setting that was switched back. A release's own helixsr.ini (1.2-1.4) has more keys and never qualifies."""
+def folder_helix_version(folder):
+    """Version of the HelixSR DLL in an install folder (any of the names it goes by), or None."""
+    for n in (*NAMES, DLL_NGX, "helixsr.dll"):
+        p = Path(folder) / n
+        if p.exists() and is_helixsr(p):
+            return helix_version(p)
+    return None
+
+
+def ini_defaults(folder):
+    """HelixSR's defaults for the install in folder. From 1.9 it sharpens lightly by default (NVIDIA's filter at 0.1);
+    up to 1.8 sharpening was off (Sharpness 0.5 when turned on)."""
+    d = dict(INI_DEFAULTS)
+    m = re.match(r"(\d+)\.(\d+)", folder_helix_version(folder) or "")
+    if m and (int(m.group(1)), int(m.group(2))) >= (1, 9):
+        d[("sharpening", "sharpener")] = "nvidia"
+        d[("sharpening", "sharpness")] = "0.1"
+    return d
+
+
+def ini_holds_only_defaults(text, defaults=None):
+    """True when a helixsr.ini sets nothing but HelixSR's defaults (INI_DEFAULTS, or those of the install: see
+    ini_defaults), e.g. one the plugin created for a setting that was switched back. A release's own helixsr.ini
+    (1.2-1.4) has more keys and never qualifies."""
+    defaults = defaults or INI_DEFAULTS
     cur = None
     for line in text.splitlines():
         l = line.strip()
@@ -835,7 +857,7 @@ def ini_holds_only_defaults(text):
             cur = m.group(1).strip().lower()
             continue
         m = re.match(r"^([^=]+?)\s*=\s*(.*)$", l)
-        if not m or INI_DEFAULTS.get((cur, m.group(1).strip().lower())) != m.group(2).strip().lower():
+        if not m or defaults.get((cur, m.group(1).strip().lower())) != m.group(2).strip().lower():
             return False
     return True
 
@@ -861,20 +883,23 @@ def network_resolution_options(text):
 
 def helix_ini_values(folder):
     ini = Path(folder) / "helixsr.ini"
+    d = ini_defaults(folder)
+    sharpener, sharpness = d[("sharpening", "sharpener")], d[("sharpening", "sharpness")]
+    defaults = {"sharpener_default": sharpener, "sharpness_default": sharpness}
     if not ini.exists():
         return {"exists": False, "network_resolution": "auto", "sharpening": "off", "upscaler_dll": "",
-                "model_e_enabled": True, "network_resolutions": [], "sharpener": "off", "sharpness": "0.5",
-                "int8": "auto"}
+                "model_e_enabled": True, "network_resolutions": [], "sharpener": sharpener, "sharpness": sharpness,
+                "int8": "auto", **defaults}
     t = read_text(ini)
-    return {"exists": True,
+    return {"exists": True, **defaults,
             "network_resolution": ini_get(t, "Upscaling", "NetworkResolution") or "auto",
             "sharpening": ini_get(t, "Sharpening", "Mode") or "off",
             "upscaler_dll": ini_get(t, "Forwarding", "UpscalerDll") or "",
             # HelixSR's default is on; anything but an explicit false counts as on
             "model_e_enabled": (ini_get(t, "ModelE", "Enabled") or "true").strip().lower() != "false",
             "network_resolutions": network_resolution_options(t),
-            "sharpener": (ini_get(t, "Sharpening", "Sharpener") or "off").strip().lower(),
-            "sharpness": (ini_get(t, "Sharpening", "Sharpness") or "0.5").strip(),
+            "sharpener": (ini_get(t, "Sharpening", "Sharpener") or sharpener).strip().lower(),
+            "sharpness": (ini_get(t, "Sharpening", "Sharpness") or sharpness).strip(),
             "int8": (ini_get(t, "Upscaling", "Int8") or "auto").strip().lower()}   # 1.9+
 
 
@@ -2059,7 +2084,7 @@ class Plugin:
                 raise RuntimeError("Unknown option.")
             # a file the plugin created only for the network switch goes away again when it's back on, so no stray
             # helixsr.ini is left in a release without a settings file (or in an install made by HelixSR's setup)
-            if ini_holds_only_defaults(text):
+            if ini_holds_only_defaults(text, ini_defaults(f)):
                 ini.unlink(missing_ok=True)
                 return "Saved (back to HelixSR's default). Restart the game to apply."
             write_text(ini, text)

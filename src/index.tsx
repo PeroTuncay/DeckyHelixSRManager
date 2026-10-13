@@ -98,6 +98,8 @@ type IniValues = {
   sharpener: string; // 1.8+: off / nvidia / rcas
   sharpness: string; // 1.8+: 0.0 - 1.0
   int8: string; // 1.9+: auto / on / off
+  sharpener_default: string; // HelixSR's own default for this install: off up to 1.8, nvidia (at 0.1) from 1.9
+  sharpness_default: string;
 };
 
 type DirectTarget = {
@@ -1015,9 +1017,13 @@ function IniControls({
           <PanelSectionRow>
             <DropdownItem
               label="Sharpening"
-              description="Off by default, as DLSS. Restart the game after changing it."
+              description={
+                ini.sharpener_default === "off"
+                  ? "Off by default, as DLSS. Restart the game after changing it."
+                  : `HelixSR's default: light NVIDIA sharpening (${ini.sharpness_default}). Off = no sharpening, as DLSS. Restart the game after changing it.`
+              }
               rgOptions={SHARPENERS}
-              selectedOption={SHARPENERS.some((o) => o.data === ini.sharpener) ? ini.sharpener : "off"}
+              selectedOption={SHARPENERS.some((o) => o.data === ini.sharpener) ? ini.sharpener : ini.sharpener_default}
               onChange={(o) => save("sharpener", o.data)}
             />
           </PanelSectionRow>
@@ -1025,9 +1031,9 @@ function IniControls({
             <PanelSectionRow>
               <DropdownItem
                 label="Sharpness"
-                description="0.5 is NVIDIA's default."
+                description={ini.sharpness_default === "0.1" ? "0.1 is HelixSR's default, 0.5 NVIDIA's." : "0.5 is NVIDIA's default."}
                 rgOptions={SHARPNESS.map((v) => ({ data: v, label: v }))}
-                selectedOption={SHARPNESS.find((v) => Number(v) === Number(ini.sharpness)) ?? "0.5"}
+                selectedOption={SHARPNESS.find((v) => Number(v) === Number(ini.sharpness)) ?? ini.sharpness_default}
                 onChange={(o) => save("sharpness", o.data)}
               />
             </PanelSectionRow>
@@ -1715,7 +1721,7 @@ function GameSection({ appid, active }: { appid: string; active: Active }) {
                   in Desktop Mode and answer r for this game. Don't use it in online games (ban risk).
                 </div>
               </Note>
-              <CheckBlock check={d.check} ini={{ exists: false, network_resolution: "auto", sharpening: "off", upscaler_dll: "", model_e_enabled: true, network_resolutions: [], sharpener: "off", sharpness: "0.5", int8: "auto" }} session={game.session} details={details} />
+              <CheckBlock check={d.check} ini={{ exists: false, network_resolution: "auto", sharpening: "off", upscaler_dll: "", model_e_enabled: true, network_resolutions: [], sharpener: "off", sharpness: "0.5", int8: "auto", sharpener_default: "off", sharpness_default: "0.5" }} session={game.session} details={details} />
             </div>
           ))}
         </Accordion>
