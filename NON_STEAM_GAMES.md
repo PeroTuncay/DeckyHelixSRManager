@@ -56,4 +56,8 @@ or one level down).
 6. Heroic, Legendary, Lutris (added on the Mac, tested with stand-in files): check against real installs; Lutris
    needs `sqlite3` in Decky's bundled Python (without it the yml files are used unfiltered, so uninstalled games with
    an existing exe could show up).
-7. README (game list, sources, Add game folder), version bump, release notes; delete this file.
+7. README (game list, sources, Add game folder), version bump, release notes. Move the credit for store file
+   locations/formats (HelixSR-Decky, MIT; Unifideck) into the README notes or LICENSE third-party notes, then delete
+   this file.
+8. Tests: `npm test` (tests/test_game_sources.py, unittest, no extra packages). Extend them with real-device
+   findings (e.g. an anonymized real games.map / shortcuts.vdf / installed.json as fixtures).

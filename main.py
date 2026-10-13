@@ -496,7 +496,8 @@ def unifideck_games(shortcuts):
 
 def has_exe(folder):
     try:
-        return any(e.is_file() and e.name.lower().endswith(".exe") for e in os.scandir(folder))
+        with os.scandir(folder) as it:
+            return any(e.is_file() and e.name.lower().endswith(".exe") for e in it)
     except OSError:
         return False
 
@@ -2278,8 +2279,9 @@ class Plugin:
                 raise RuntimeError("That folder doesn't exist.")
             if not safe_game_folder(p):
                 raise RuntimeError("Pick one game's folder, not a whole drive, library or your home folder.")
-            if not any(e.name.lower().endswith(".exe") for d in (p, *[x.path for x in os.scandir(p) if x.is_dir()])
-                       for e in os.scandir(d) if e.is_file()):
+            with os.scandir(p) as it:
+                subdirs = [x.path for x in it if x.is_dir()]
+            if not any(has_exe(d) for d in (p, *subdirs)):
                 raise RuntimeError("No Windows game (.exe) found in that folder or the folders directly inside it.")
             s = load_settings()
             lst = s.setdefault("custom_games", [])
