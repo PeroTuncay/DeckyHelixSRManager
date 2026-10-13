@@ -14,6 +14,7 @@ this device), and reads helixsr.log / OptiScaler.log to show whether HelixSR act
 Runs as the Deck user (no root flag): every file it touches lives in the user's home or Steam libraries.
 """
 import asyncio
+import errno
 import json
 import os
 import re
@@ -495,6 +496,113 @@ def near_optiscaler(target, opti_dirs):
     return any(target.parent == o or target.parent.parent == o for o in opti_dirs)
 
 
+# --- DirectX version: HelixSR only works in DirectX 12 games ----------------------------------------------------------
+
+# not the game itself: installers, crash reporters, launchers, anti-cheat
+NOT_GAME_EXE = re.compile(r"unins|crash|launcher|setup|redist|dxsetup|easyanticheat|eac_|battleye|report|helper|"
+                          r"unitycrashhandler", re.I)
+DX_CACHE = {}   # (exe path, mtime, size) -> "dx11" / "dx12" / None
+
+
+def pe_imports(path):
+    """Lowercase names of the DLLs an exe imports statically (its PE import table), or None if it can't be read."""
+    try:
+        with open(path, "rb") as f:
+            mz = f.read(64)
+            if len(mz) < 64 or mz[:2] != b"MZ":
+                return None
+            f.seek(struct.unpack_from("<I", mz, 0x3C)[0])
+            hdr = f.read(24)
+            if hdr[:4] != b"PE\0\0":
+                return None
+            nsec, optsize = struct.unpack_from("<H", hdr, 6)[0], struct.unpack_from("<H", hdr, 20)[0]
+            opt = f.read(optsize)
+            dirs = 112 if struct.unpack_from("<H", opt, 0)[0] == 0x20B else 96   # PE32+ / PE32
+            imp_rva = struct.unpack_from("<I", opt, dirs + 8)[0]
+            secs = []
+            for _ in range(nsec):
+                s = f.read(40)
+                vsize, va, rawsize, rawptr = struct.unpack_from("<IIII", s, 8)
+                secs.append((va, max(vsize, rawsize), rawptr))
+
+            def offset(rva):
+                return next((raw + rva - va for va, size, raw in secs if va <= rva < va + size), None)
+
+            names, start = set(), offset(imp_rva) if imp_rva else None
+            for i in range(2000 if start is not None else 0):
+                f.seek(start + i * 20)
+                d = f.read(20)
+                if len(d) < 20 or d == b"\0" * 20:
+                    break
+                at = offset(struct.unpack_from("<I", d, 12)[0])
+                if at is not None:
+                    f.seek(at)
+                    names.add(f.read(80).split(b"\0")[0].decode("ascii", "replace").lower())
+            return names
+    except (OSError, struct.error, IndexError):
+        return None
+
+
+def file_mentions(path, word):
+    """Whether a file contains word anywhere (ASCII or UTF-16, any case): catches a DLL loaded by name at runtime."""
+    needles = [word.lower().encode(), word.lower().encode("utf-16-le")]
+    keep = max(len(n) for n in needles) - 1
+    try:
+        with open(path, "rb") as f:
+            tail = b""
+            while True:
+                chunk = f.read(4 * 1024 * 1024)
+                if not chunk:
+                    return False
+                data = (tail + chunk).lower()
+                if any(n in data for n in needles):
+                    return True
+                tail = data[-keep:]
+    except OSError:
+        return False
+
+
+def exe_dx(path):
+    """'dx12' if the exe imports or names d3d12, 'dx11' if it imports d3d11 and never names d3d12, else None."""
+    try:
+        st = path.stat()
+    except OSError:
+        return None
+    key = (str(path), st.st_mtime, st.st_size)
+    if key not in DX_CACHE:
+        imports = pe_imports(path) or set()
+        if "d3d12.dll" in imports:
+            DX_CACHE[key] = "dx12"
+        elif "d3d11.dll" in imports:
+            DX_CACHE[key] = "dx12" if file_mentions(path, "d3d12") else "dx11"
+        else:
+            DX_CACHE[key] = None
+    return DX_CACHE[key]
+
+
+def folder_dx(folder):
+    """DirectX version of the game exe(s) in a folder: ("dx11", "Nioh2.exe") when every one of them is DirectX 11
+    only, ("dx12", name) when one uses DirectX 12, (None, None) when unknown (no exe there, unreadable)."""
+    try:
+        exes = sorted(p for p in Path(folder).iterdir()
+                      if p.suffix.lower() == ".exe" and p.is_file() and not NOT_GAME_EXE.search(p.name))
+    except OSError:
+        return None, None
+    found = [(exe_dx(p), p.name) for p in exes]
+    for kind in ("dx12", "dx11"):
+        hit = next((name for k, name in found if k == kind), None)
+        if hit and (kind == "dx12" or all(k != "dx12" for k, _ in found)):
+            return kind, hit
+    return None, None
+
+
+def refuse_dx11(folder):
+    kind, exe = folder_dx(folder)
+    if kind == "dx11":
+        raise RuntimeError(f"Not supported: {exe} uses DirectX 11, and HelixSR only works in DirectX 12 games. "
+                           f"Nothing was changed.")
+
+
 # --- the HelixSR download and setup -----------------------------------------------------------------------------------
 
 def helix_state():
@@ -904,6 +1012,7 @@ def opti_state(opti_dir, game_folder):
         "disabled": installed_kind(opti_dir) in ("ffx", "ngx") and bool((install_marker(opti_dir) or {}).get("disabled")),
         "official_route": (official_marker_data(opti_dir) or {}).get("route"),
         "hints": opti_hints(text, opti_dxgi_quirk(opti_dir)),
+        "dx11": folder_dx(opti_dir)[0] == "dx11",   # a DirectX 11 game: HelixSR can't run there
     }
 
 
@@ -1003,7 +1112,8 @@ def install_optiscaler(opti_dir, dll, ini_src, keep_fsr4):
     cur_sr = resolve_ffx(opti_dir, text, "FfxDx12SRPath", NAMES[0])
     cur_ffx = resolve_ffx(opti_dir, text, "FfxDx12Path", NAMES[1])
     if sub.exists() and not marker.exists():
-        raise RuntimeError(f"{sub} exists but wasn't made by this plugin; rename or remove it first.")
+        raise RuntimeError(f"There's already a folder named {OPTI_SUBDIR} next to OptiScaler.ini that this plugin "
+                           f"didn't create. Rename or remove it, then try again.")
     sub.mkdir(exist_ok=True)
 
     copy_helix(dll, sub / NAMES[1])
@@ -1073,8 +1183,8 @@ def install_optiscaler_ngx(opti_dir, dll):
     if installed_kind(opti_dir) == "ffx":
         uninstall_optiscaler(opti_dir)   # an FSR-based HelixSR (1.4 and older) set up here before
     if sub.exists() and installed_kind(opti_dir) is None and any(sub.iterdir()):
-        raise RuntimeError(f"{sub} exists but wasn't made by HelixSR's installer or this plugin; rename or remove it "
-                           f"first.")
+        raise RuntimeError(f"There's already a folder named {OPTI_SUBDIR} next to OptiScaler.ini that neither this "
+                           f"plugin nor HelixSR's installer created. Rename or remove it, then try again.")
     text = read_text(ini)
     data = ngx_marker_data(opti_dir)
     prev = data["previous"] if data else {
@@ -1768,6 +1878,7 @@ class Plugin:
                     direct.append({
                         "path": str(t), "rel": os.path.relpath(t, folder), "state": state, "helix_version": v,
                         "near_optiscaler": near_optiscaler(t, opti), "size": t.stat().st_size,
+                        "dx11": folder_dx(t.parent)[0] == "dx11",
                         "check": helix_log_check(t.parent), "ini": helix_ini_values(t.parent),
                     })
                 optis = []
@@ -1834,6 +1945,16 @@ class Plugin:
     async def _do(self, fn):
         try:
             return {"ok": True, "message": await asyncio.to_thread(fn)}
+        except OSError as e:
+            # a file operation failed: say what in plain words instead of Python's error with full paths
+            decky.logger.exception("action")
+            why = {errno.ENOENT: "a file it needed wasn't there", errno.EACCES: "no permission to change a file",
+                   errno.EPERM: "no permission to change a file", errno.ENOSPC: "the disk is full",
+                   errno.EROFS: "the drive is read-only", errno.EBUSY: "a file is in use (is the game running?)"}
+            name = os.path.basename(str(e.filename)) if getattr(e, "filename", None) else ""
+            return {"ok": False, "error": f"Couldn't change the game's files: {why.get(e.errno, e.strerror or 'file error')}"
+                                          f"{f' ({name})' if name else ''}. Press Check again to see the current state; "
+                                          f"the debug report (More options) has the details."}
         except Exception as e:
             decky.logger.exception("action")
             return {"ok": False, "error": str(e)}
@@ -1845,6 +1966,7 @@ class Plugin:
                 raise RuntimeError(f"HelixSR {helix_version(dll)} only works through OptiScaler (as DLSS). Pick a 1.4 "
                                    f"release to replace a game's FSR 3.1 directly.")
             self._guard(path, True)
+            refuse_dx11(self._checked_target(path).parent)
             return install_direct(self._checked_target(path), dll, active_dir() / "helixsr.ini")
         return await self._do(work)
 
@@ -1857,6 +1979,7 @@ class Plugin:
     async def install_optiscaler(self, path, keep_fsr4):
         def work():
             self._guard(path, True)
+            refuse_dx11(self._checked_opti(path))
             return install_optiscaler(self._checked_opti(path), built_dll(), active_dir() / "helixsr.ini",
                                       bool(keep_fsr4))
         return await self._do(work)

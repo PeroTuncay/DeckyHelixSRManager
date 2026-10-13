@@ -206,6 +206,12 @@ npm run package     # -> out/HelixSR-Manager.zip
 These are fixes outside the plugin: it doesn't change game files beyond installing HelixSR. Apply them at your own
 risk and only for offline play.
 
+### DirectX 11 games (e.g. Nioh 2)
+
+HelixSR only works in DirectX 12 games. The plugin reads the game's .exe, and for a DirectX 11 game it shows "Not
+supported: this game uses DirectX 11" instead of an install button. If a game has a DirectX 12 mode, switch to it
+(often a launch option or a setting) and press **Check again**.
+
 ### The Witcher 3: "DLSS not supported" under Proton
 
 The game (5.0, DirectX 12) refuses DLSS when it detects Wine: it looks for `wine_get_version` and then never starts

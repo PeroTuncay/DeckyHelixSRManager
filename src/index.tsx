@@ -106,6 +106,7 @@ type DirectTarget = {
   helix_version: string | null;
   near_optiscaler: boolean;
   size: number;
+  dx11: boolean; // the game exe next to it is DirectX 11 only: HelixSR can't run there
   check: Check;
   ini: IniValues;
 };
@@ -128,6 +129,7 @@ type OptiTarget = {
   disabled: boolean; // HelixSR's files stay, OptiScaler uses its previous upscaler
   official_route: "optiscaler" | "dlss" | null; // how HelixSR's own setup installed it
   hints: { level: "warn" | "info"; text: string }[]; // OptiScaler settings worth knowing about
+  dx11: boolean; // the game exe next to OptiScaler is DirectX 11 only: HelixSR can't run there
   check: Check;
   opti_log: { exists: boolean; path: string; mtime?: number; lines: string[]; not_nvidia: boolean };
   ini: IniValues;
@@ -1075,6 +1077,8 @@ function DirectSection({
     .map((t) =>
       t.state === "helixsr" || t.state === "helixsr_no_backup"
         ? `HelixSR ${t.helix_version ?? ""} installed`
+        : t.dx11 && t.state === "original"
+          ? "Not supported (DirectX 11 game)"
         : t.state === "disabled"
           ? "HelixSR disabled"
           : t.state === "conflict"
@@ -1112,7 +1116,12 @@ function DirectSection({
                 DLL directly.
               </Note>
             )}
-            {t.state === "original" && active.kind !== "ngx" && (
+            {t.state === "original" && t.dx11 && (
+              <Note>
+                <span style={{ color: YELLOW }}>This game uses DirectX 11. HelixSR only works in DirectX 12 games, so it can't be installed here.</span>
+              </Note>
+            )}
+            {t.state === "original" && active.kind !== "ngx" && !t.dx11 && (
               <PanelSectionRow>
                 <ButtonItem layout="below" disabled={!active.ready || busy !== null || !!guard.install} onClick={() => run(t.path, () => installDirect(t.path))}>
                   {active.ready ? `Install HelixSR ${active.version} here` : notReady(active)}
@@ -1345,7 +1354,7 @@ function OptiItem({
           </div>
         )}
       </Note>
-      {!ngxActive && !o.configured && o.current_sr_dll && (
+      {!ngxActive && !o.configured && o.current_sr_dll && !(o.dx11 && !installed) && (
         <PanelSectionRow>
           <ToggleField
             label="Keep current FSR selectable"
@@ -1365,6 +1374,10 @@ function OptiItem({
         <Note>
           The plugin leaves this install to HelixSR's setup. To update or remove it, run helixsr-setup.sh from HelixSR's
           folder in Desktop Mode (answer r for this game to remove). The check below still works.
+        </Note>
+      ) : o.dx11 && !installed ? (
+        <Note>
+          <span style={{ color: YELLOW }}>This game uses DirectX 11. HelixSR only works in DirectX 12 games, so it can't be installed here.</span>
         </Note>
       ) : !o.configured ? (
         <PanelSectionRow>
@@ -1477,7 +1490,9 @@ function optiSummary(items: OptiTarget[]) {
           ? "HelixSR disabled"
           : o.configured
             ? `HelixSR ${o.helix_version ?? ""} in use`
-            : o.installed_kind
+            : o.dx11 && !o.installed_kind
+              ? "Not supported (DirectX 11 game)"
+              : o.installed_kind
               ? "Needs attention (OptiScaler reinstalled?)"
               : "HelixSR not installed",
     )
@@ -1519,6 +1534,14 @@ function gameStatus(game: GameDetail, active: Active): { color: string; title: s
   if (installs.length === 0) {
     if (game.direct.some((t) => t.state === "disabled") || game.optiscaler.some((o) => o.disabled)) {
       return { color: GREY, title: "HelixSR is disabled in this game", detail: 'The game uses its previous upscaler. "Enable HelixSR again" below switches back.' };
+    }
+    const targets = [...game.direct.filter((t) => t.state === "original"), ...game.optiscaler.filter((o) => !o.installed_kind)];
+    if (targets.length > 0 && targets.every((t) => t.dx11)) {
+      return {
+        color: YELLOW,
+        title: "Not supported: this game uses DirectX 11",
+        detail: "HelixSR only works in DirectX 12 games. If the game has a DirectX 12 mode (often a launch option or a setting), switch to it and press Check again.",
+      };
     }
     if (!active.ready) {
       return { color: GREY, title: "HelixSR isn't installed in this game", detail: "First download and build HelixSR (steps 1 and 2 above), then install it here." };
