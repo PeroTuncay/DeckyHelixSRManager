@@ -22,7 +22,8 @@ Third-party notes:
 - The install/uninstall logic in main.py (the *.original.dll backup, the helixsr-install.json marker, finding Steam
   libraries) follows HelixSR's setup/helixsr_install.py, Copyright 2026 lonewolf0622, licensed under the Apache
   License, Version 2.0 (https://www.apache.org/licenses/LICENSE-2.0).
-- HelixSR itself is not part of this repository. The plugin downloads it from
-  https://github.com/lonewolf0622/HelixSR, where the HelixSR Freeware License (DLL) and Apache-2.0 (setup scripts)
-  apply. The network HelixSR's setup builds from NVIDIA's DLSS DLL is NVIDIA's property, for personal use on your own
+- HelixSR itself is not part of this repository. The plugin downloads official releases, unmodified, from
+  https://github.com/lonewolf0622/HelixSR. The HelixSR DLL is under the HelixSR Freeware License; the setup scripts
+  are under Apache-2.0 up to 1.8.1 and under the HelixSR Freeware License from 1.9, which allows reading and running
+  them but not modifying them. For 1.9 and later the plugin therefore runs HelixSR's setup as published, unchanged. The network HelixSR's setup builds from NVIDIA's DLSS DLL is NVIDIA's property, for personal use on your own
   device only.

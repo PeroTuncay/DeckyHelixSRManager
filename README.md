@@ -37,7 +37,7 @@ OptiScaler.
   needed buttons (download again, delete, clean up, diagnostics, debug report) behind **More options**.
 - **Clean up (optional):** remove every downloaded release and the setup's downloads in one go. Not needed for updates.
 
-> **HelixSR has changed its approach a few times.** Up to 1.4 and again **from 1.7** (tested up to 1.8.1), it replaces
+> **HelixSR has changed its approach a few times.** Up to 1.4 and again **from 1.7** (tested up to 1.8.1; 1.9.0, a pre-release, is supported), it replaces
 > FSR 3.1 (`amd_fidelityfx_dx12.dll`): through OptiScaler for DLSS games (select DLSS in the game), or in place of a
 > game's own FSR 3.1. 1.5 and 1.6 instead replaced DLSS (`nvngx.dll`) through OptiScaler and needed a Steam launch
 > option; those releases were withdrawn upstream, but the plugin still supports a 1.5 you already downloaded.
@@ -245,4 +245,6 @@ If the game doesn't start after the fix, restore the original exe and try anothe
 ## License
 
 Public domain ([The Unlicense](LICENSE)): copy, change and use it however you like. The install logic follows
-HelixSR's Apache-2.0 installer script; see [LICENSE](LICENSE) for the notes on HelixSR and NVIDIA's files.
+HelixSR's Apache-2.0 installer script (up to 1.8.1). HelixSR itself isn't included: the plugin downloads official
+releases unmodified, and from 1.9 (HelixSR Freeware License) runs HelixSR's setup exactly as published. See
+[LICENSE](LICENSE) for the notes on HelixSR and NVIDIA's files.

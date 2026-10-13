@@ -97,6 +97,7 @@ type IniValues = {
   network_resolutions: string[]; // what this install's own helixsr.ini documents (differs between releases)
   sharpener: string; // 1.8+: off / nvidia / rcas
   sharpness: string; // 1.8+: 0.0 - 1.0
+  int8: string; // 1.9+: auto / on / off
 };
 
 type DirectTarget = {
@@ -165,6 +166,11 @@ const SHARPENERS = [
   { data: "off", label: "Off (as DLSS)" },
   { data: "nvidia", label: "NVIDIA (Image Sharpening)" },
   { data: "rcas", label: "AMD RCAS (FSR's)" },
+];
+const INT8 = [
+  { data: "auto", label: "Auto (on for RDNA 2 and newer, like the Deck)" },
+  { data: "on", label: "On" },
+  { data: "off", label: "Off (the normal network)" },
 ];
 const SHARPNESS = ["0.1", "0.2", "0.3", "0.4", "0.5", "0.6", "0.7", "0.8", "0.9", "1.0"];
 
@@ -962,12 +968,14 @@ function IniControls({
   ini,
   style,
   details,
+  int8 = false,
   onChange,
 }: {
   folder: string;
   ini: IniValues;
   style: SettingsStyle;
   details: boolean;
+  int8?: boolean; // 1.9+: the int8 network setting
   onChange: () => void;
 }) {
   const settingsFile = style === "legacy";
@@ -990,6 +998,17 @@ function IniControls({
           onChange={(on) => save("model_e", on ? "true" : "false")}
         />
       </PanelSectionRow>
+      )}
+      {int8 && (
+        <PanelSectionRow>
+          <DropdownItem
+            label="Int8 network (experimental)"
+            description="New in 1.9: about 15% faster on RDNA 2 and newer, with output that differs only invisibly. Turn it off if something looks wrong. Restart the game after changing it."
+            rgOptions={INT8}
+            selectedOption={INT8.some((o) => o.data === ini.int8) ? ini.int8 : "auto"}
+            onChange={(o) => save("int8", o.data)}
+          />
+        </PanelSectionRow>
       )}
       {style === "sharpener" && (
         <>
@@ -1164,6 +1183,7 @@ function DirectSection({
                   ini={t.ini}
                   style={settingsStyle("ffx", t.helix_version)}
                   details={details}
+                  int8={versionAtLeast(t.helix_version, 1, 9)}
                   onChange={reload}
                 />
               </>
@@ -1470,6 +1490,7 @@ function OptiItem({
             ini={o.ini}
             style={settingsStyle(installed, o.helix_version)}
             details={details}
+            int8={versionAtLeast(o.helix_version, 1, 9)}
             onChange={reload}
           />
         </>
@@ -1694,7 +1715,7 @@ function GameSection({ appid, active }: { appid: string; active: Active }) {
                   in Desktop Mode and answer r for this game. Don't use it in online games (ban risk).
                 </div>
               </Note>
-              <CheckBlock check={d.check} ini={{ exists: false, network_resolution: "auto", sharpening: "off", upscaler_dll: "", model_e_enabled: true, network_resolutions: [], sharpener: "off", sharpness: "0.5" }} session={game.session} details={details} />
+              <CheckBlock check={d.check} ini={{ exists: false, network_resolution: "auto", sharpening: "off", upscaler_dll: "", model_e_enabled: true, network_resolutions: [], sharpener: "off", sharpness: "0.5", int8: "auto" }} session={game.session} details={details} />
             </div>
           ))}
         </Accordion>

@@ -73,7 +73,8 @@ NETWORK_RESOLUTIONS = ["auto", "full",
 SHARPENING_MODES = ["off", "game", "override"]       # up to 1.4: [Sharpening] Mode
 SHARPENERS = ["off", "nvidia", "rcas"]                 # 1.8+: [Sharpening] Sharpener (NVIDIA's NIS or AMD's RCAS)
 # a helixsr.ini holding nothing but these values is the same as none (the plugin removes such a file)
-INI_DEFAULTS = {("modele", "enabled"): "true", ("sharpening", "sharpener"): "off", ("sharpening", "sharpness"): "0.5"}
+INI_DEFAULTS = {("modele", "enabled"): "true", ("sharpening", "sharpener"): "off", ("sharpening", "sharpness"): "0.5",
+                ("upscaling", "int8"): "auto"}
 
 # helixsr.log lines worth showing (taken from the strings HelixSR 1.4.1 logs)
 LOG_HIGHLIGHTS = ("network running", "HelixSR ERROR", "NOT RUNNING", "summary:", "wave size:", "upscaler list:",
@@ -862,7 +863,8 @@ def helix_ini_values(folder):
     ini = Path(folder) / "helixsr.ini"
     if not ini.exists():
         return {"exists": False, "network_resolution": "auto", "sharpening": "off", "upscaler_dll": "",
-                "model_e_enabled": True, "network_resolutions": [], "sharpener": "off", "sharpness": "0.5"}
+                "model_e_enabled": True, "network_resolutions": [], "sharpener": "off", "sharpness": "0.5",
+                "int8": "auto"}
     t = read_text(ini)
     return {"exists": True,
             "network_resolution": ini_get(t, "Upscaling", "NetworkResolution") or "auto",
@@ -872,7 +874,8 @@ def helix_ini_values(folder):
             "model_e_enabled": (ini_get(t, "ModelE", "Enabled") or "true").strip().lower() != "false",
             "network_resolutions": network_resolution_options(t),
             "sharpener": (ini_get(t, "Sharpening", "Sharpener") or "off").strip().lower(),
-            "sharpness": (ini_get(t, "Sharpening", "Sharpness") or "0.5").strip()}
+            "sharpness": (ini_get(t, "Sharpening", "Sharpness") or "0.5").strip(),
+            "int8": (ini_get(t, "Upscaling", "Int8") or "auto").strip().lower()}   # 1.9+
 
 
 # --- OptiScaler -------------------------------------------------------------------------------------------------------
@@ -1423,11 +1426,18 @@ def build_only_script(script):
 
 def setup_command(script, d, built):
     """Arguments for a release's setup. Up to 1.6 the script takes the HelixSR folder. From 1.7 extra arguments mean
-    *game* folders, and a built network is only rebuilt with --rebuild."""
+    *game* folders, and a built network is only rebuilt with --rebuild.
+    From 1.9 the setup scripts are under the HelixSR Freeware License (read and run, no modified copies), so the script
+    runs unmodified: after the build, HelixSR's game installer asks its first question, gets no answer (stdin is
+    /dev/null) and ends without changing any game (helixsr_install.py: EOFError -> return). Up to 1.8.1 (Apache 2.0)
+    the build-only copy stays, which never starts the installer at all."""
     text = Path(script).read_text(errors="replace")
+    rebuild = ["--rebuild"] if built else []
     if "--rebuild" not in text:
         return ["bash", str(script), str(d), "--yes"]
-    return ["bash", str(build_only_script(script)), "--yes"] + (["--rebuild"] if built else [])
+    if "HelixSR Freeware License" in text:
+        return ["bash", str(script), "--yes"] + rebuild
+    return ["bash", str(build_only_script(script)), "--yes"] + rebuild
 
 
 def setup_status():
@@ -2043,6 +2053,8 @@ class Plugin:
                 text = ini_set(text, "Sharpening", "Sharpener", value)
             elif option == "sharpness" and re.fullmatch(r"(0(\.\d+)?|1(\.0+)?)", value or ""):
                 text = ini_set(text, "Sharpening", "Sharpness", value)
+            elif option == "int8" and value in ("auto", "on", "off"):
+                text = ini_set(text, "Upscaling", "Int8", value)
             else:
                 raise RuntimeError("Unknown option.")
             # a file the plugin created only for the network switch goes away again when it's back on, so no stray
