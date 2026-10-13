@@ -180,22 +180,34 @@ const SHARPNESS = ["0.1", "0.2", "0.3", "0.4", "0.5", "0.6", "0.7", "0.8", "0.9"
 
 // source: where the game comes from. Non-Steam games: Unifideck's games.map, Steam shortcuts that start a game's .exe,
 // or a folder the user added.
-type GameSource = "steam" | "unifideck" | "shortcut" | "folder";
+type GameSource = "steam" | "unifideck" | "heroic" | "legendary" | "lutris" | "shortcut" | "folder";
 type GameSummary = {
   appid: string;
   name: string;
   path: string;
   source: GameSource;
+  store?: string; // Heroic: GOG / Amazon / Epic
   fsr: boolean;
   optiscaler: boolean;
   helixsr: boolean;
 };
-const SOURCE_LABEL: Record<GameSource, string> = { steam: "", unifideck: "Unifideck", shortcut: "non-Steam", folder: "added folder" };
+const SOURCE_LABEL: Record<GameSource, string> = {
+  steam: "",
+  unifideck: "Unifideck",
+  heroic: "Heroic",
+  legendary: "Legendary",
+  lutris: "Lutris",
+  shortcut: "non-Steam",
+  folder: "added folder",
+};
+const sourceLabel = (g: { source: GameSource; store?: string }) =>
+  g.source === "heroic" && g.store ? `Heroic (${g.store})` : SOURCE_LABEL[g.source];
 type GameDetail = Result & {
   appid: string;
   name: string;
   path: string;
   source: GameSource;
+  store?: string;
   shortcut_appid?: number | null; // a non-Steam game's Steam shortcut (launch options)
   direct: DirectTarget[];
   optiscaler: OptiTarget[];
@@ -259,6 +271,7 @@ const getGame = callable<[appid: string], GameDetail>("get_game");
 const addCustomGame = callable<[path: string], Result & { appid?: string }>("add_custom_game");
 const removeCustomGame = callable<[appid: string], Result>("remove_custom_game");
 const homeDir = callable<[], string>("home_dir");
+const getUnresolvedShortcuts = callable<[], string[]>("get_unresolved_shortcuts");
 const installDirect = callable<[path: string, ignoreDx11?: boolean], Result>("install_direct");
 const uninstallDirect = callable<[path: string], Result>("uninstall_direct");
 const installOptiscaler = callable<[path: string, keepFsr4: boolean, ignoreDx11?: boolean], Result>("install_optiscaler");
@@ -1732,7 +1745,7 @@ function GameSection({ appid, active, onRemoved }: { appid: string; active: Acti
           </PanelSectionRow>
           {game.source !== "steam" && (
             <Note>
-              {game.source === "folder" ? "Added folder" : `From ${SOURCE_LABEL[game.source]}`}: {game.path}
+              {game.source === "folder" ? "Added folder" : `From ${sourceLabel(game)}`}: {game.path}
             </Note>
           )}
           {game.source === "folder" && (
@@ -1922,6 +1935,7 @@ function Content() {
   const [selected, setSelected] = useState<string>(storage("selected", ""));
   const [scanning, setScanning] = useState(false);
   const [update, setUpdate] = useState<PluginUpdate | null>(null);
+  const [unresolved, setUnresolved] = useState<string[]>([]);
 
   const refreshHelix = useCallback(() => {
     getHelixState().then(setHelix);
@@ -1930,6 +1944,7 @@ function Content() {
   const scan = useCallback(async () => {
     setScanning(true);
     setGames(await listGames());
+    setUnresolved(await getUnresolvedShortcuts());
     setScanning(false);
   }, []);
 
@@ -1983,7 +1998,7 @@ function Content() {
               label="Game"
               rgOptions={shown.map((g) => ({
                 data: g.appid,
-                label: `${g.name}${g.source !== "steam" ? ` · ${SOURCE_LABEL[g.source]}` : ""}${g.helixsr ? "  ✓" : ""}`,
+                label: `${g.name}${g.source !== "steam" ? ` · ${sourceLabel(g)}` : ""}${g.helixsr ? "  ✓" : ""}`,
               }))}
               selectedOption={current?.appid}
               strDefaultLabel="Select a game"
@@ -2003,6 +2018,14 @@ function Content() {
             {scanning ? "Scanning…" : "Rescan games"}
           </ButtonItem>
         </PanelSectionRow>
+        {unresolved.length > 0 && (
+          <Note>
+            {unresolved.length === 1 ? "One non-Steam shortcut starts" : `${unresolved.length} non-Steam shortcuts start`} a
+            launcher, so the game's folder isn't known: {unresolved.slice(0, 3).join(", ")}
+            {unresolved.length > 3 ? ` and ${unresolved.length - 3} more` : ""}. To use HelixSR there, add the game's
+            folder with "Add game folder".
+          </Note>
+        )}
         <PanelSectionRow>
           <ButtonItem
             layout="below"
