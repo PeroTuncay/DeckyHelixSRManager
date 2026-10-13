@@ -1291,8 +1291,15 @@ def plugin_version():
 
 
 def version_key(v):
-    """'0.9.1', 'v0.9.1' or a tag like 'v.0.8.3' -> (0, 9, 1) for comparing."""
-    return tuple(int(n) for n in re.findall(r"\d+", v or "")[:3]) or (0,)
+    """'0.9.1', 'v0.9.1' or a tag like 'v.0.8.3' -> (0, 9, 1, 0) for comparing. A pre-release ('0.10.0-beta.1') sorts
+    below its release: (0, 10, 0, -1, 1) < (0, 10, 0, 0)."""
+    m = re.match(r"\D*(\d+(?:\.\d+)*)(.*)", (v or "").strip())
+    if not m:
+        return (0,)
+    nums = [int(n) for n in m.group(1).split(".")[:3]]
+    nums += [0] * (3 - len(nums))
+    rest = re.findall(r"\d+", m.group(2))
+    return (*nums, -1, *(int(n) for n in rest[:1])) if m.group(2).strip(" .-+") else (*nums, 0)
 
 
 def ini_holds_only_defaults(text, defaults=None):
