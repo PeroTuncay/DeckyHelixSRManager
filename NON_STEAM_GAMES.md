@@ -23,6 +23,15 @@ folder). Files from other programs are read with size caps (shortcuts.vdf 8 MB, 
 4 MB, pga.db 256 MB, 10,000 rows). Store file locations and formats were learned from the MIT-licensed
 dawoodtogoo2020-code/HelixSR-Decky and from Unifideck's source; the code here is our own.
 
+## Opt-in
+
+Other stores are off by default (settings `stores: {id: true}`; `enabled_stores()`, `STORES`). A store that's off isn't
+read, listed or allowed for file changes. Panel: collapsible "Other Stores" section (between HelixSR Installation and
+Game Configuration) with one toggle per store, showing "N games found" or "Not found on this device" (`get_stores`,
+`set_store`); a store that isn't found can't be switched on. "Add game folder" and the note about launcher shortcuts
+live there too. Added folders need no switch (adding one is the opt-in). A game installed from two stores in two
+folders is listed twice, each with its source tag; the same folder is listed once.
+
 ## Safety boundary
 
 `inside_library()` decides which files the plugin may change. `game_roots()` = Steam libraries' `common` folders plus

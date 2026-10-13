@@ -628,16 +628,62 @@ def custom_games():
             for p in load_settings().get("custom_games", []) if os.path.isdir(p)]
 
 
+# Other stores are opt-in (panel section "Other Stores"): nothing of a store is read, listed or allowed for changes until
+# its switch is on. Added folders ("Add game folder") need no switch: adding one is the opt-in.
+STORES = [  # (id, label, what it covers)
+    ("unifideck", "Unifideck", "GOG, Epic, Amazon, Ubisoft and more, installed through the Unifideck plugin"),
+    ("heroic", "Heroic Games Launcher", "GOG, Epic and Amazon games installed through Heroic"),
+    ("legendary", "Legendary", "Epic games installed with the Legendary command-line client"),
+    ("lutris", "Lutris", "Windows games installed through Lutris"),
+    ("shortcuts", "Non-Steam games in Steam", "Games added with Steam's \"Add a non-Steam game\""),
+]
+
+
+def enabled_stores():
+    on = load_settings().get("stores", {})
+    return {sid for sid, _, _ in STORES if on.get(sid)}
+
+
+def store_found(sid):
+    """Whether a store's files exist on this device (cheap: no game folders are opened)."""
+    if sid == "unifideck":
+        return UNIFIDECK_MAP.is_file()
+    if sid == "heroic":
+        return any((b / rel).is_file() for b in HEROIC_DIRS for rel, _ in HEROIC_FILES)
+    if sid == "legendary":
+        return any(f.is_file() for f in LEGENDARY_FILES)
+    if sid == "lutris":
+        return any(c.is_dir() or db.is_file() for c, db in LUTRIS)
+    if sid == "shortcuts":
+        return any(any(r.glob("userdata/*/config/shortcuts.vdf")) for r in steam_roots())
+    return False
+
+
+def store_games(sid, shortcuts, unresolved=None):
+    if sid == "unifideck":
+        return unifideck_games(shortcuts)
+    if sid == "heroic":
+        return heroic_games()
+    if sid == "legendary":
+        return legendary_games()
+    if sid == "lutris":
+        return lutris_games()
+    if sid == "shortcuts":
+        return shortcut_games(shortcuts, unresolved)
+    return []
+
+
 def all_games(notes=None):
-    """Steam games plus games from other stores, by id. A folder listed twice keeps its first source (Steam,
-    Unifideck, Heroic, Legendary, Lutris, a shortcut, an added folder). With a list for notes, the names of Steam
-    shortcuts whose game folder couldn't be found (and that no other source listed) are added to it."""
+    """Steam games plus games from the stores switched on, plus added folders, by id. A folder listed twice keeps its
+    first source (Steam, Unifideck, Heroic, Legendary, Lutris, a shortcut, an added folder). With a list for notes, the
+    names of Steam shortcuts whose game folder couldn't be found (and that no other source listed) are added to it."""
     games = {k: {**g, "source": "steam"} for k, g in installed_games().items()}
     seen = {os.path.realpath(g["path"]) for g in games.values()}
-    shortcuts = steam_shortcuts()
+    on = enabled_stores()
+    shortcuts = steam_shortcuts() if on & {"unifideck", "shortcuts"} else []   # Unifideck: names from its shortcuts
     unresolved = []
-    for g in [*unifideck_games(shortcuts), *heroic_games(), *legendary_games(), *lutris_games(),
-              *shortcut_games(shortcuts, unresolved), *custom_games()]:
+    found = [g for sid, _, _ in STORES if sid in on for g in store_games(sid, shortcuts, unresolved)]
+    for g in [*found, *custom_games()]:
         rp = os.path.realpath(g["path"])
         if rp in seen or not safe_game_folder(rp):
             continue
@@ -2300,6 +2346,28 @@ class Plugin:
         s["custom_games"] = [p for p in s.get("custom_games", []) if custom_game_id(p) != appid]
         save_settings(s)
         return {"ok": True, "message": "Removed from the list. The game's files are unchanged."}
+
+    async def get_stores(self):
+        """The other stores for the panel: label, what they cover, switched on, found on this device, games found."""
+        def work():
+            on = enabled_stores()
+            shortcuts = steam_shortcuts() if store_found("shortcuts") or store_found("unifideck") else []
+            out = []
+            for sid, label, desc in STORES:
+                found = store_found(sid)
+                count = len([g for g in store_games(sid, shortcuts) if safe_game_folder(g["path"])]) if found else 0
+                out.append({"id": sid, "label": label, "description": desc, "enabled": sid in on, "found": found,
+                            "count": count})
+            return out
+        return await asyncio.to_thread(work)
+
+    async def set_store(self, sid, enabled):
+        if sid not in {s for s, _, _ in STORES}:
+            return {"ok": False, "error": "Unknown store."}
+        s = load_settings()
+        s.setdefault("stores", {})[sid] = bool(enabled)
+        save_settings(s)
+        return {"ok": True}
 
     async def get_unresolved_shortcuts(self):
         """Steam shortcuts (from the last game scan) that start a launcher whose game folder isn't known."""

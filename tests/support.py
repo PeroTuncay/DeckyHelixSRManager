@@ -63,6 +63,13 @@ def binary_kv(d):
     return out + b"\x08"
 
 
+def enable_stores(*ids):
+    """Switches other stores on, as the "Other Stores" toggles do (all are off by default)."""
+    s = main.load_settings()
+    s["stores"] = {i: True for i in ids}
+    main.save_settings(s)
+
+
 def shortcuts_vdf(entries, user="123"):
     """Writes Steam's shortcuts.vdf for one user. entries: dicts with appid, AppName, Exe, StartDir, ..."""
     data = binary_kv({"shortcuts": {str(i): e for i, e in enumerate(entries)}}) + b"\x08"

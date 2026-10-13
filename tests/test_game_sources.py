@@ -7,7 +7,7 @@ import sqlite3
 import struct
 import unittest
 
-from support import HOME, FakeHomeTest, binary_kv, game, main, shortcuts_vdf, write
+from support import HOME, FakeHomeTest, binary_kv, enable_stores, game, main, shortcuts_vdf, write
 
 
 def run(coro):
@@ -154,6 +154,7 @@ class AllGamesTest(FakeHomeTest):
               json.dumps({"installed": [{"installPath": str(w3), "title": "The Witcher 3"}]}))
         shortcuts_vdf([{"appid": 1, "AppName": "Witcher3", "Exe": "flatpak", "StartDir": str(HOME)},
                        {"appid": 2, "AppName": "Unknown Launcher Game", "Exe": "flatpak", "StartDir": str(HOME)}])
+        enable_stores("unifideck", "heroic", "shortcuts")
         notes = []
         games = main.all_games(notes)
         self.assertEqual([(g["source"], g["path"]) for g in games.values()], [("unifideck", str(w3))])
@@ -162,6 +163,7 @@ class AllGamesTest(FakeHomeTest):
     def test_unsafe_folders_are_never_listed(self):
         game(HOME, "stray.exe")
         shortcuts_vdf([{"appid": 1, "AppName": "Home", "Exe": "/usr/bin/x", "StartDir": str(HOME)}])
+        enable_stores("shortcuts")
         self.assertEqual(main.all_games(), {})
 
 
@@ -174,6 +176,7 @@ class SafetyTest(FakeHomeTest):
     def test_only_listed_game_folders_may_be_changed(self):
         ctl = game(HOME / "Games/Control", "Control.exe")
         write(HOME / ".config/legendary/installed.json", json.dumps({"c": {"install_path": str(ctl), "title": "Control"}}))
+        enable_stores("legendary")
         self.assertTrue(main.inside_library(ctl / "OptiScaler.ini"))
         self.assertTrue(main.inside_library(ctl / "sub/helixsr.ini"))
         self.assertFalse(main.inside_library(ctl.parent / "Other/OptiScaler.ini"))
@@ -184,6 +187,49 @@ class SafetyTest(FakeHomeTest):
         self.assertEqual(main.steam_appid({"appid": "292030"}), "292030")
         self.assertIsNone(main.steam_appid({"appid": "heroic:abc", "source": "heroic"}))
         self.assertEqual(main.game_last_played({"appid": "shortcut:5", "source": "shortcut", "last_played": 42}), 42)
+
+
+class OptInTest(FakeHomeTest):
+    """Other stores are off by default: nothing listed, nothing allowed, until their switch is on."""
+
+    def setUp(self):
+        super().setUp()
+        self.ctl = game(HOME / "Games/Control", "Control.exe")
+        write(HOME / ".config/legendary/installed.json",
+              json.dumps({"c": {"install_path": str(self.ctl), "title": "Control"}}))
+
+    def test_off_by_default_not_listed_and_not_allowed(self):
+        self.assertEqual(main.all_games(), {})
+        self.assertFalse(main.inside_library(self.ctl / "OptiScaler.ini"))
+
+    def test_switching_a_store_on_and_off(self):
+        p = main.Plugin()
+        self.assertTrue(run(p.set_store("legendary", True))["ok"])
+        self.assertEqual([g["name"] for g in main.all_games().values()], ["Control"])
+        run(p.set_store("legendary", False))
+        self.assertEqual(main.all_games(), {})
+
+    def test_only_the_switched_on_store_is_read(self):
+        w3 = game(HOME / "Games/Witcher3", "witcher3.exe")
+        write(HOME / ".config/heroic/gog_store/installed.json",
+              json.dumps({"installed": [{"installPath": str(w3), "title": "The Witcher 3"}]}))
+        enable_stores("heroic")
+        self.assertEqual([g["name"] for g in main.all_games().values()], ["The Witcher 3"])
+
+    def test_store_list_reports_found_and_counts(self):
+        stores = {s["id"]: s for s in run(main.Plugin().get_stores())}
+        self.assertEqual(list(stores), ["unifideck", "heroic", "legendary", "lutris", "shortcuts"])
+        self.assertEqual((stores["legendary"]["found"], stores["legendary"]["count"], stores["legendary"]["enabled"]),
+                         (True, 1, False))
+        self.assertEqual((stores["heroic"]["found"], stores["heroic"]["count"]), (False, 0))
+
+    def test_unknown_store_is_refused(self):
+        self.assertFalse(run(main.Plugin().set_store("origin", True))["ok"])
+
+    def test_added_folders_need_no_switch(self):
+        cel = game(HOME / "Games/Celeste", "Celeste.exe")
+        r = run(main.Plugin().add_custom_game(str(cel)))
+        self.assertIn(r["appid"], main.all_games())
 
 
 class CustomGamesTest(FakeHomeTest):

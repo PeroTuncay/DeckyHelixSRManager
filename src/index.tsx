@@ -272,6 +272,9 @@ const addCustomGame = callable<[path: string], Result & { appid?: string }>("add
 const removeCustomGame = callable<[appid: string], Result>("remove_custom_game");
 const homeDir = callable<[], string>("home_dir");
 const getUnresolvedShortcuts = callable<[], string[]>("get_unresolved_shortcuts");
+type StoreInfo = { id: string; label: string; description: string; enabled: boolean; found: boolean; count: number };
+const getStores = callable<[], StoreInfo[]>("get_stores");
+const setStore = callable<[id: string, enabled: boolean], Result>("set_store");
 const installDirect = callable<[path: string, ignoreDx11?: boolean], Result>("install_direct");
 const uninstallDirect = callable<[path: string], Result>("uninstall_direct");
 const installOptiscaler = callable<[path: string, keepFsr4: boolean, ignoreDx11?: boolean], Result>("install_optiscaler");
@@ -1847,6 +1850,81 @@ function GameSection({ appid, active, onRemoved }: { appid: string; active: Acti
   );
 }
 
+// --- other stores (opt-in) -------------------------------------------------------------------------------------------
+
+function OtherStoresSection({
+  unresolved,
+  rescan,
+  onAdded,
+}: {
+  unresolved: string[];
+  rescan: () => Promise<void>;
+  onAdded: (appid: string) => Promise<void>;
+}) {
+  const [stores, setStores] = useState<StoreInfo[] | null>(null);
+  const load = useCallback(() => {
+    getStores().then(setStores);
+  }, []);
+  useEffect(load, [load]);
+
+  const on = (stores ?? []).filter((s) => s.enabled);
+  const summary = on.length ? `On: ${on.map((s) => s.label).join(", ")}` : "Off: only Steam games are listed";
+  const showUnresolved = unresolved.length > 0 && on.some((s) => s.id === "shortcuts");
+
+  return (
+    <Accordion id="stores" title="Other Stores" summary={summary}>
+      <Note>
+        Games from other stores show up in the game list once you turn their store on. Nothing is read from a store
+        that is off.
+      </Note>
+      {stores === null && <Note>Looking for stores…</Note>}
+      {(stores ?? []).map((s) => (
+        <PanelSectionRow key={s.id}>
+          <ToggleField
+            label={s.label}
+            description={`${s.description}. ${
+              s.found ? (s.count === 1 ? "1 game found." : `${s.count} games found.`) : "Not found on this device."
+            }`}
+            checked={s.enabled}
+            disabled={!s.found && !s.enabled}
+            onChange={async (v) => {
+              await setStore(s.id, v);
+              load();
+              await rescan();
+            }}
+          />
+        </PanelSectionRow>
+      ))}
+      {showUnresolved && (
+        <Note>
+          {unresolved.length === 1 ? "One non-Steam shortcut starts" : `${unresolved.length} non-Steam shortcuts start`} a
+          launcher, so the game's folder isn't known: {unresolved.slice(0, 3).join(", ")}
+          {unresolved.length > 3 ? ` and ${unresolved.length - 3} more` : ""}. To use HelixSR there, add the game's folder
+          with "Add game folder".
+        </Note>
+      )}
+      <PanelSectionRow>
+        <ButtonItem
+          layout="below"
+          description="For a game that isn't listed: pick the folder it's installed in."
+          onClick={async () => {
+            try {
+              const picked = await openFilePicker(FileSelectionType.FOLDER, await homeDir(), false, true);
+              const r = await addCustomGame(picked.realpath || picked.path);
+              toast(r, "Game list");
+              if (r.ok && r.appid) await onAdded(r.appid);
+            } catch {
+              /* picker closed */
+            }
+          }}
+        >
+          Add game folder
+        </ButtonItem>
+      </PanelSectionRow>
+    </Accordion>
+  );
+}
+
 // --- plugin updates -------------------------------------------------------------------------------------------------
 
 async function installPluginUpdate(u: PluginUpdate) {
@@ -1977,6 +2055,14 @@ function Content() {
     <>
       <PluginUpdateBanner update={update} />
       <HelixSection state={helix} refresh={refreshHelix} />
+      <OtherStoresSection
+        unresolved={unresolved}
+        rescan={scan}
+        onAdded={async (appid) => {
+          await scan();
+          pick(appid);
+        }}
+      />
       <PanelSection title="Game Configuration">
         <PanelSectionRow>
           <ToggleField
@@ -2016,35 +2102,6 @@ function Content() {
         <PanelSectionRow>
           <ButtonItem layout="below" disabled={scanning} onClick={scan}>
             {scanning ? "Scanning…" : "Rescan games"}
-          </ButtonItem>
-        </PanelSectionRow>
-        {unresolved.length > 0 && (
-          <Note>
-            {unresolved.length === 1 ? "One non-Steam shortcut starts" : `${unresolved.length} non-Steam shortcuts start`} a
-            launcher, so the game's folder isn't known: {unresolved.slice(0, 3).join(", ")}
-            {unresolved.length > 3 ? ` and ${unresolved.length - 3} more` : ""}. To use HelixSR there, add the game's
-            folder with "Add game folder".
-          </Note>
-        )}
-        <PanelSectionRow>
-          <ButtonItem
-            layout="below"
-            description="For a game from another store that isn't listed: pick the folder it's installed in."
-            onClick={async () => {
-              try {
-                const picked = await openFilePicker(FileSelectionType.FOLDER, await homeDir(), false, true);
-                const r = await addCustomGame(picked.realpath || picked.path);
-                toast(r, "Game list");
-                if (r.ok) {
-                  await scan();
-                  if (r.appid) pick(r.appid);
-                }
-              } catch {
-                /* picker closed */
-              }
-            }}
-          >
-            Add game folder
           </ButtonItem>
         </PanelSectionRow>
       </PanelSection>
