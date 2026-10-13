@@ -14,7 +14,7 @@ import {
   showModal,
   staticClasses,
 } from "@decky/ui";
-import { addEventListener, callable, definePlugin, removeEventListener, toaster } from "@decky/api";
+import { FileSelectionType, addEventListener, callable, definePlugin, openFilePicker, removeEventListener, toaster } from "@decky/api";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FaDna } from "react-icons/fa";
 
@@ -178,11 +178,25 @@ const INT8 = [
 ];
 const SHARPNESS = ["0.1", "0.2", "0.3", "0.4", "0.5", "0.6", "0.7", "0.8", "0.9", "1.0"];
 
-type GameSummary = { appid: string; name: string; path: string; fsr: boolean; optiscaler: boolean; helixsr: boolean };
+// source: where the game comes from. Non-Steam games: Unifideck's games.map, Steam shortcuts that start a game's .exe,
+// or a folder the user added.
+type GameSource = "steam" | "unifideck" | "shortcut" | "folder";
+type GameSummary = {
+  appid: string;
+  name: string;
+  path: string;
+  source: GameSource;
+  fsr: boolean;
+  optiscaler: boolean;
+  helixsr: boolean;
+};
+const SOURCE_LABEL: Record<GameSource, string> = { steam: "", unifideck: "Unifideck", shortcut: "non-Steam", folder: "added folder" };
 type GameDetail = Result & {
   appid: string;
   name: string;
   path: string;
+  source: GameSource;
+  shortcut_appid?: number | null; // a non-Steam game's Steam shortcut (launch options)
   direct: DirectTarget[];
   optiscaler: OptiTarget[];
   running: string[]; // processes of the game, if it runs
@@ -242,6 +256,9 @@ const cleanPreview = callable<[], { items: string[]; bytes: number }>("clean_pre
 const cleanAll = callable<[], Result>("clean");
 const listGames = callable<[], GameSummary[]>("list_games");
 const getGame = callable<[appid: string], GameDetail>("get_game");
+const addCustomGame = callable<[path: string], Result & { appid?: string }>("add_custom_game");
+const removeCustomGame = callable<[appid: string], Result>("remove_custom_game");
+const homeDir = callable<[], string>("home_dir");
 const installDirect = callable<[path: string, ignoreDx11?: boolean], Result>("install_direct");
 const uninstallDirect = callable<[path: string], Result>("uninstall_direct");
 const installOptiscaler = callable<[path: string, keepFsr4: boolean, ignoreDx11?: boolean], Result>("install_optiscaler");
@@ -1670,7 +1687,7 @@ function gameStatus(game: GameDetail, active: Active): { color: string; title: s
   };
 }
 
-function GameSection({ appid, active }: { appid: string; active: Active }) {
+function GameSection({ appid, active, onRemoved }: { appid: string; active: Active; onRemoved: () => void }) {
   const [game, setGame] = useState<GameDetail | null>(null);
   const [loading, setLoading] = useState(false);
   const [details, setDetails] = useStoredFlag("details");
@@ -1713,6 +1730,24 @@ function GameSection({ appid, active }: { appid: string; active: Active }) {
               {loading ? "Checking…" : "Check again"}
             </ButtonItem>
           </PanelSectionRow>
+          {game.source !== "steam" && (
+            <Note>
+              {game.source === "folder" ? "Added folder" : `From ${SOURCE_LABEL[game.source]}`}: {game.path}
+            </Note>
+          )}
+          {game.source === "folder" && (
+            <PanelSectionRow>
+              <ButtonItem
+                layout="below"
+                onClick={async () => {
+                  toast(await removeCustomGame(game.appid), "Game list");
+                  onRemoved();
+                }}
+              >
+                Remove from the list (files stay)
+              </ButtonItem>
+            </PanelSectionRow>
+          )}
           <PanelSectionRow>
             <ToggleField
               label="Show technical details"
@@ -1791,7 +1826,7 @@ function GameSection({ appid, active }: { appid: string; active: Active }) {
       {game.optiscaler.length > 0 && (
         <Accordion id="optiscaler" title="OptiScaler" summary={optiSummary(game.optiscaler)}>
           {game.optiscaler.map((o) => (
-            <OptiItem key={o.dir} o={o} active={active} appid={game.appid} guard={guard} session={game.session} details={details} reload={reload} />
+            <OptiItem key={o.dir} o={o} active={active} appid={game.source === "steam" ? game.appid : String(game.shortcut_appid ?? "")} guard={guard} session={game.session} details={details} reload={reload} />
           ))}
         </Accordion>
       )}
@@ -1948,7 +1983,7 @@ function Content() {
               label="Game"
               rgOptions={shown.map((g) => ({
                 data: g.appid,
-                label: `${g.name}${g.helixsr ? "  ✓" : ""}`,
+                label: `${g.name}${g.source !== "steam" ? ` · ${SOURCE_LABEL[g.source]}` : ""}${g.helixsr ? "  ✓" : ""}`,
               }))}
               selectedOption={current?.appid}
               strDefaultLabel="Select a game"
@@ -1968,6 +2003,27 @@ function Content() {
             {scanning ? "Scanning…" : "Rescan games"}
           </ButtonItem>
         </PanelSectionRow>
+        <PanelSectionRow>
+          <ButtonItem
+            layout="below"
+            description="For a game from another store that isn't listed: pick the folder it's installed in."
+            onClick={async () => {
+              try {
+                const picked = await openFilePicker(FileSelectionType.FOLDER, await homeDir(), false, true);
+                const r = await addCustomGame(picked.realpath || picked.path);
+                toast(r, "Game list");
+                if (r.ok) {
+                  await scan();
+                  if (r.appid) pick(r.appid);
+                }
+              } catch {
+                /* picker closed */
+              }
+            }}
+          >
+            Add game folder
+          </ButtonItem>
+        </PanelSectionRow>
       </PanelSection>
       {current && (
         <GameSection
@@ -1979,6 +2035,7 @@ function Content() {
             version: helix?.version ?? null,
             kind: helix?.kind ?? null,
           }}
+          onRemoved={scan}
         />
       )}
       <AboutSection
