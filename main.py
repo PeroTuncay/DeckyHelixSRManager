@@ -510,7 +510,8 @@ DX_CACHE = {}   # (exe path, mtime, size) -> "dx11" / "dx12" / None
 
 
 def pe_imports(path):
-    """Lowercase names of the DLLs an exe imports statically (its PE import table), or None if it can't be read."""
+    """Lowercase names of the DLLs an exe imports (its PE import table plus its delay-load imports, the way many games
+    load d3d12.dll), or None if it can't be read."""
     try:
         with open(path, "rb") as f:
             mz = f.read(64)
@@ -522,8 +523,11 @@ def pe_imports(path):
                 return None
             nsec, optsize = struct.unpack_from("<H", hdr, 6)[0], struct.unpack_from("<H", hdr, 20)[0]
             opt = f.read(optsize)
-            dirs = 112 if struct.unpack_from("<H", opt, 0)[0] == 0x20B else 96   # PE32+ / PE32
+            pe32plus = struct.unpack_from("<H", opt, 0)[0] == 0x20B
+            dirs = 112 if pe32plus else 96
+            image_base = struct.unpack_from("<Q", opt, 24)[0] if pe32plus else struct.unpack_from("<I", opt, 28)[0]
             imp_rva = struct.unpack_from("<I", opt, dirs + 8)[0]
+            delay_rva = struct.unpack_from("<I", opt, dirs + 13 * 8)[0] if len(opt) >= dirs + 14 * 8 else 0
             secs = []
             for _ in range(nsec):
                 s = f.read(40)
@@ -533,16 +537,25 @@ def pe_imports(path):
             def offset(rva):
                 return next((raw + rva - va for va, size, raw in secs if va <= rva < va + size), None)
 
-            names, start = set(), offset(imp_rva) if imp_rva else None
-            for i in range(2000 if start is not None else 0):
-                f.seek(start + i * 20)
-                d = f.read(20)
-                if len(d) < 20 or d == b"\0" * 20:
-                    break
-                at = offset(struct.unpack_from("<I", d, 12)[0])
-                if at is not None:
-                    f.seek(at)
-                    names.add(f.read(80).split(b"\0")[0].decode("ascii", "replace").lower())
+            names = set()
+
+            def read_table(rva, size, name_at, delay):
+                start = offset(rva) if rva else None
+                for i in range(2000 if start is not None else 0):
+                    f.seek(start + i * size)
+                    d = f.read(size)
+                    if len(d) < size or d == b"\0" * size:
+                        break
+                    name_rva = struct.unpack_from("<I", d, name_at)[0]
+                    if delay and not struct.unpack_from("<I", d, 0)[0] & 1:
+                        name_rva -= image_base   # old-style delay descriptor: addresses, not RVAs
+                    at = offset(name_rva) if name_rva > 0 else None
+                    if at is not None:
+                        f.seek(at)
+                        names.add(f.read(80).split(b"\0")[0].decode("ascii", "replace").lower())
+
+            read_table(imp_rva, 20, 12, False)     # IMAGE_IMPORT_DESCRIPTOR: Name at 12
+            read_table(delay_rva, 32, 4, True)     # IMAGE_DELAYLOAD_DESCRIPTOR: DllNameRVA at 4
             return names
     except (OSError, struct.error, IndexError):
         return None
@@ -586,26 +599,35 @@ def exe_dx(path):
 
 
 def folder_dx(folder):
-    """DirectX version of the game exe(s) in a folder: ("dx11", "Nioh2.exe") when every one of them is DirectX 11
-    only, ("dx12", name) when one uses DirectX 12, (None, None) when unknown (no exe there, unreadable)."""
+    """DirectX version of the game in a folder, judged by its own exe (the largest .exe there; helpers are skipped):
+    ("dx11", "Nioh2.exe") only when that exe is DirectX 11 only and no exe there uses DirectX 12; ("dx12", name) when
+    one does; (None, None) when unknown. Unknown never blocks anything: a small DirectX 11 helper next to a game exe
+    the check can't read (Ghost of Tsushima) used to decide "dx11" on its own."""
     try:
-        exes = sorted(p for p in Path(folder).iterdir()
-                      if p.suffix.lower() == ".exe" and p.is_file() and not NOT_GAME_EXE.search(p.name))
+        exes = [p for p in Path(folder).iterdir()
+                if p.suffix.lower() == ".exe" and p.is_file() and not NOT_GAME_EXE.search(p.name)]
+        exes.sort(key=lambda p: p.stat().st_size, reverse=True)
     except OSError:
         return None, None
+    if not exes:
+        return None, None
     found = [(exe_dx(p), p.name) for p in exes]
-    for kind in ("dx12", "dx11"):
-        hit = next((name for k, name in found if k == kind), None)
-        if hit and (kind == "dx12" or all(k != "dx12" for k, _ in found)):
-            return kind, hit
-    return None, None
+    dx12 = next((name for k, name in found if k == "dx12"), None)
+    if dx12:
+        return "dx12", dx12
+    return ("dx11", found[0][1]) if found[0][0] == "dx11" else (None, None)
+
+
+def dx11_info(folder):
+    kind, exe = folder_dx(folder)
+    return {"dx11": kind == "dx11", "dx11_exe": exe if kind == "dx11" else None}
 
 
 def refuse_dx11(folder):
     kind, exe = folder_dx(folder)
     if kind == "dx11":
-        raise RuntimeError(f"Not supported: {exe} uses DirectX 11, and HelixSR only works in DirectX 12 games. "
-                           f"Nothing was changed.")
+        raise RuntimeError(f"Not supported: {exe} looks like a DirectX 11 game, and HelixSR only works in DirectX 12 "
+                           f"games. Nothing was changed. If you're sure the game runs on DirectX 12, use Install anyway.")
 
 
 # --- the HelixSR download and setup -----------------------------------------------------------------------------------
@@ -1060,7 +1082,7 @@ def opti_state(opti_dir, game_folder):
         "disabled": installed_kind(opti_dir) in ("ffx", "ngx") and bool((install_marker(opti_dir) or {}).get("disabled")),
         "official_route": (official_marker_data(opti_dir) or {}).get("route"),
         "hints": opti_hints(text, opti_dxgi_quirk(opti_dir)),
-        "dx11": folder_dx(opti_dir)[0] == "dx11",   # a DirectX 11 game: HelixSR can't run there
+        **dx11_info(opti_dir),   # a DirectX 11 game: HelixSR can't run there
     }
 
 
@@ -1960,7 +1982,7 @@ class Plugin:
                     direct.append({
                         "path": str(t), "rel": os.path.relpath(t, folder), "state": state, "helix_version": v,
                         "near_optiscaler": near_optiscaler(t, opti), "size": t.stat().st_size,
-                        "dx11": folder_dx(t.parent)[0] == "dx11",
+                        **dx11_info(t.parent),
                         "check": helix_log_check(t.parent), "ini": helix_ini_values(t.parent),
                     })
                 optis = []
@@ -2041,14 +2063,15 @@ class Plugin:
             decky.logger.exception("action")
             return {"ok": False, "error": str(e)}
 
-    async def install_direct(self, path):
+    async def install_direct(self, path, ignore_dx11=False):
         def work():
             dll = built_dll()
             if dll_kind(dll) == "ngx":
                 raise RuntimeError(f"HelixSR {helix_version(dll)} only works through OptiScaler (as DLSS). Pick a 1.4 "
                                    f"release to replace a game's FSR 3.1 directly.")
             self._guard(path, True)
-            refuse_dx11(self._checked_target(path).parent)
+            if not ignore_dx11:
+                refuse_dx11(self._checked_target(path).parent)
             return install_direct(self._checked_target(path), dll, active_dir() / "helixsr.ini")
         return await self._do(work)
 
@@ -2058,10 +2081,11 @@ class Plugin:
             return uninstall_direct(self._checked_target(path), active_dir() / "helixsr.ini")
         return await self._do(work)
 
-    async def install_optiscaler(self, path, keep_fsr4):
+    async def install_optiscaler(self, path, keep_fsr4, ignore_dx11=False):
         def work():
             self._guard(path, True)
-            refuse_dx11(self._checked_opti(path))
+            if not ignore_dx11:   # "Install anyway": the user knows the game runs on DirectX 12
+                refuse_dx11(self._checked_opti(path))
             return install_optiscaler(self._checked_opti(path), built_dll(), active_dir() / "helixsr.ini",
                                       bool(keep_fsr4))
         return await self._do(work)

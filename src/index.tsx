@@ -110,6 +110,7 @@ type DirectTarget = {
   near_optiscaler: boolean;
   size: number;
   dx11: boolean; // the game exe next to it is DirectX 11 only: HelixSR can't run there
+  dx11_exe: string | null;
   check: Check;
   ini: IniValues;
 };
@@ -133,6 +134,7 @@ type OptiTarget = {
   official_route: "optiscaler" | "dlss" | null; // how HelixSR's own setup installed it
   hints: { level: "warn" | "info"; text: string }[]; // OptiScaler settings worth knowing about
   dx11: boolean; // the game exe next to OptiScaler is DirectX 11 only: HelixSR can't run there
+  dx11_exe: string | null;
   check: Check;
   opti_log: { exists: boolean; path: string; mtime?: number; lines: string[]; not_nvidia: boolean };
   ini: IniValues;
@@ -240,9 +242,9 @@ const cleanPreview = callable<[], { items: string[]; bytes: number }>("clean_pre
 const cleanAll = callable<[], Result>("clean");
 const listGames = callable<[], GameSummary[]>("list_games");
 const getGame = callable<[appid: string], GameDetail>("get_game");
-const installDirect = callable<[path: string], Result>("install_direct");
+const installDirect = callable<[path: string, ignoreDx11?: boolean], Result>("install_direct");
 const uninstallDirect = callable<[path: string], Result>("uninstall_direct");
-const installOptiscaler = callable<[path: string, keepFsr4: boolean], Result>("install_optiscaler");
+const installOptiscaler = callable<[path: string, keepFsr4: boolean, ignoreDx11?: boolean], Result>("install_optiscaler");
 const uninstallOptiscaler = callable<[path: string], Result>("uninstall_optiscaler");
 const setOptiLogging = callable<[path: string, on: boolean], Result>("set_opti_logging");
 const setHelixOption = callable<[folder: string, option: string, value: string], Result>("set_helix_option");
@@ -362,6 +364,38 @@ function Progress({ percent, indeterminate, text, right }: { percent: number; in
         <ProgressBar nProgress={percent} indeterminate={indeterminate} />
       </div>
     </PanelSectionRow>
+  );
+}
+
+// Shown instead of the install button when the game's exe looks DirectX 11 only, with a way past it in case the check
+// is wrong (a game that loads DirectX 12 in a way the exe check can't see).
+function Dx11Note({ exe, disabled, onInstall }: { exe: string | null; disabled: boolean; onInstall: () => void }) {
+  return (
+    <>
+      <Note>
+        <span style={{ color: YELLOW }}>
+          {exe ?? "The game"} looks like a DirectX 11 game. HelixSR only works in DirectX 12 games, so it isn't offered here.
+        </span>
+      </Note>
+      <PanelSectionRow>
+        <ButtonItem
+          layout="below"
+          disabled={disabled}
+          onClick={() =>
+            showModal(
+              <ConfirmModal
+                strTitle="Install HelixSR anyway?"
+                strDescription="Only if you're sure this game runs on DirectX 12 (the check reads the game's .exe and can be wrong). If it's really DirectX 11, HelixSR is simply never used and you can remove it again."
+                strOKButtonText="Install anyway"
+                onOK={onInstall}
+              />,
+            )
+          }
+        >
+          Install anyway (game runs on DirectX 12)
+        </ButtonItem>
+      </PanelSectionRow>
+    </>
   );
 }
 
@@ -1164,10 +1198,12 @@ function DirectSection({
                 DLL directly.
               </Note>
             )}
-            {t.state === "original" && t.dx11 && (
-              <Note>
-                <span style={{ color: YELLOW }}>This game uses DirectX 11. HelixSR only works in DirectX 12 games, so it can't be installed here.</span>
-              </Note>
+            {t.state === "original" && t.dx11 && active.kind !== "ngx" && (
+              <Dx11Note
+                exe={t.dx11_exe}
+                disabled={!active.ready || busy !== null || !!guard.install}
+                onInstall={() => run(t.path, () => installDirect(t.path, true))}
+              />
             )}
             {t.state === "original" && active.kind !== "ngx" && !t.dx11 && (
               <PanelSectionRow>
@@ -1425,9 +1461,11 @@ function OptiItem({
           folder in Desktop Mode (answer r for this game to remove). The check below still works.
         </Note>
       ) : o.dx11 && !installed ? (
-        <Note>
-          <span style={{ color: YELLOW }}>This game uses DirectX 11. HelixSR only works in DirectX 12 games, so it can't be installed here.</span>
-        </Note>
+        <Dx11Note
+          exe={o.dx11_exe}
+          disabled={!active.ready || busy || !!guard.install}
+          onInstall={() => run(() => installOptiscaler(o.dir, !!o.current_sr_dll, true))}
+        />
       ) : !o.configured ? (
         <PanelSectionRow>
           <ButtonItem
@@ -1589,8 +1627,8 @@ function gameStatus(game: GameDetail, active: Active): { color: string; title: s
     if (targets.length > 0 && targets.every((t) => t.dx11)) {
       return {
         color: YELLOW,
-        title: "Not supported: this game uses DirectX 11",
-        detail: "HelixSR only works in DirectX 12 games. If the game has a DirectX 12 mode (often a launch option or a setting), switch to it and press Check again.",
+        title: "Not supported: this game looks like DirectX 11",
+        detail: "HelixSR only works in DirectX 12 games. If the game has a DirectX 12 mode (often a launch option or a setting), switch to it and press Check again. If you're sure it already runs on DirectX 12, use \"Install anyway\" below.",
       };
     }
     if (!active.ready) {

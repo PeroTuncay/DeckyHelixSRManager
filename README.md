@@ -215,9 +215,10 @@ risk and only for offline play.
 
 ### DirectX 11 games (e.g. Nioh 2)
 
-HelixSR only works in DirectX 12 games. The plugin reads the game's .exe, and for a DirectX 11 game it shows "Not
-supported: this game uses DirectX 11" instead of an install button. If a game has a DirectX 12 mode, switch to it
-(often a launch option or a setting) and press **Check again**.
+HelixSR only works in DirectX 12 games. The plugin reads the game's .exe (its imports, including delay-loaded ones),
+and when it looks DirectX 11 only it shows "Not supported" instead of an install button. If a game has a DirectX 12
+mode, switch to it (often a launch option or a setting) and press **Check again**. The check can be wrong; if you're
+sure the game runs on DirectX 12, use **Install anyway**.
 
 ### The Witcher 3: "DLSS not supported" under Proton
 
