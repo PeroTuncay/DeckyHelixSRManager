@@ -367,7 +367,8 @@ def installed_games():
 # Only folders a store or the user named as a game's install folder are read, never whole drives, so the list stays as
 # fast as Steam's. Each such folder also becomes an allowed root for file changes (game_roots), one game at a time.
 
-UNIFIDECK_MAP = HOME / ".local/share/unifideck/games.map"   # Unifideck: "store:id=<exe>\t<work dir>\t<shortcut appid>"
+UNIFIDECK_MAP = HOME / ".local/share/unifideck/games.map"   # Unifideck: "store:id=<exe>\t<work dir>\t<shortcut appid>",
+UNIFIDECK_REGISTRY = UNIFIDECK_MAP.with_name("shortcuts_registry.json")  # older: "store:id|<exe>|<work dir>" + this
 HEROIC_DIRS = [HOME / ".config/heroic", HOME / ".var/app/com.heroicgameslauncher.hgl/config/heroic"]   # native, Flatpak
 HEROIC_FILES = [("gog_store/installed.json", "GOG"), ("nile_config/installed.json", "Amazon"),
                 ("legendaryConfig/legendary/installed.json", "Epic")]
@@ -462,29 +463,59 @@ def steam_shortcuts():
                 out.append({"appid": int(low.get("appid") or 0) & 0xFFFFFFFF, "name": str(low.get("appname") or ""),
                             "exe": str(low.get("exe") or "").strip().strip('"'),
                             "startdir": str(low.get("startdir") or "").strip().strip('"'),
+                            "launch": str(low.get("launchoptions") or ""),
                             "last_played": int(low.get("lastplaytime") or 0) or None})
     return out
 
 
+def unifideck_registry():
+    """Older Unifideck versions keep the shortcut appid per game in shortcuts_registry.json, not in games.map."""
+    raw = read_capped(UNIFIDECK_REGISTRY, MAX_JSON)
+    try:
+        data = json.loads(raw) if raw is not None else {}
+    except ValueError:
+        return {}
+    out = {}
+    for key, v in (data.items() if isinstance(data, dict) else []):
+        if isinstance(v, dict) and isinstance(v.get("appid"), int):
+            out[key] = v["appid"]
+    return out
+
+
 def unifideck_games(shortcuts):
-    """Installed games from Unifideck's games.map (GOG, Epic, Amazon, …), named after their Steam shortcut."""
+    """Installed games from Unifideck's games.map (GOG, Epic, Amazon, Ubisoft, …), named after their Steam shortcut.
+    Two formats exist: "store:id=<exe>\t<work dir>\t<signed appid>" and the older "store:id|<exe>|<work dir>" (appid in
+    shortcuts_registry.json). Cloud-streaming entries ("…|xcloud|<url>") have no folder and are skipped."""
     raw = read_capped(UNIFIDECK_MAP, MAX_MAP)
     if raw is None:
         return []
     lines = raw.decode("utf-8", "replace").splitlines()
     by_appid = {s["appid"]: s for s in shortcuts}
+    registry = None
     out = []
     for line in lines:
-        if "=" not in line:
+        eq, bar = line.find("="), line.find("|")
+        if bar > 0 and (eq < 0 or bar < eq):
+            sep = "|"
+        elif eq > 0:
+            sep = "="
+        else:
             continue
-        key, rest = line.split("=", 1)
-        parts = rest.split("\t")
+        key, rest = line.split(sep, 1)
+        parts = rest.split("\t" if sep == "=" else "|")
         exe = parts[0].strip()
+        if not exe.startswith("/"):   # e.g. "xcloud": streamed, nothing on disk
+            continue
         folder = os.path.normpath(parts[1].strip() if len(parts) > 1 and parts[1].strip() else os.path.dirname(exe))
-        try:
-            appid = int(parts[2]) & 0xFFFFFFFF if len(parts) > 2 and parts[2].strip() else None
-        except ValueError:
-            appid = None
+        appid = None
+        if sep == "=":
+            try:
+                appid = int(parts[2]) & 0xFFFFFFFF if len(parts) > 2 and parts[2].strip() else None
+            except ValueError:
+                pass
+        else:
+            registry = unifideck_registry() if registry is None else registry
+            appid = registry[key.strip()] & 0xFFFFFFFF if key.strip() in registry else None
         if not folder or not os.path.isdir(folder):
             continue
         sc = by_appid.get(appid) if appid else None
@@ -494,27 +525,49 @@ def unifideck_games(shortcuts):
     return out
 
 
-def has_exe(folder):
+def exe_names(folder):
     try:
         with os.scandir(folder) as it:
-            return any(e.is_file() and e.name.lower().endswith(".exe") for e in it)
+            return [e.name for e in it if e.is_file() and e.name.lower().endswith(".exe")]
     except OSError:
-        return False
+        return []
+
+
+def has_exe(folder):
+    return bool(exe_names(folder))
+
+
+# Store clients: a shortcut that starts one of these runs the client (or a game through it), so the exe's folder is the
+# client's, not a game's
+LAUNCHER_EXES = {"battle.net.exe", "battle.net launcher.exe", "eadesktop.exe", "ealauncher.exe", "origin.exe",
+                 "upc.exe", "ubisoftconnect.exe", "uplay.exe", "epicgameslauncher.exe", "galaxyclient.exe",
+                 "amazon games.exe", "amazon games ui.exe", "itch.exe", "playnite.desktopapp.exe",
+                 "playnite.fullscreenapp.exe", "rockstarservice.exe"}
+# Launch options or exe of a shortcut that starts a Windows game through a launcher (worth the "Add game folder" note);
+# other shortcuts (apps, emulators, streaming) aren't mentioned
+# (NonSteamLaunchers games start a store client with arguments: covered by LAUNCHER_EXES)
+GAME_LAUNCH_HINTS = ("heroic://", "lutris:rungame", "legendary launch", "nile launch", "gogdl", "bottles-cli run")
 
 
 def shortcut_games(shortcuts, unresolved=None):
     """Non-Steam shortcuts that start a Windows game: their exe directly, or a start folder holding an .exe (e.g. "Add
-    a non-Steam game"). Shortcuts that start a launcher or script (flatpak, .sh, a store's client) can't name the game's
-    folder; their names go into unresolved, so the panel can suggest "Add game folder"."""
+    a non-Steam game"). Shortcuts that start a store client (Battle.net, EA, Ubisoft, …) or go through a launcher
+    (Heroic, Lutris, …) can't name the game's folder; those that start a game go into unresolved, so the panel can
+    suggest "Add game folder". Unifideck's shortcuts are left to its own source; apps and emulators are ignored."""
     out = []
     for s in shortcuts:
-        exe, start = s["exe"], s["startdir"]
-        if exe.lower().endswith(".exe") and os.path.isfile(exe):
+        exe, start, launch = s["exe"], s["startdir"], s.get("launch", "")
+        client = os.path.basename(exe).lower() in LAUNCHER_EXES
+        if exe.lower().endswith(".exe") and os.path.isfile(exe) and not client:
             folder = start if start and os.path.isdir(start) else os.path.dirname(exe)
-        elif start and os.path.isdir(start) and has_exe(start):
+        elif not client and start and (exes := exe_names(start)) and not any(e.lower() in LAUNCHER_EXES for e in exes):
             folder = start
         else:
-            if unresolved is not None and s["name"]:
+            text = f"{exe} {launch}".lower()
+            # a client started with arguments after %command% starts a game through it (e.g. Battle.net --exec=…)
+            via_client = client and launch.split("%command%", 1)[-1].strip() != "" and "%command%" in launch
+            if unresolved is not None and s["name"] and exe and "unifideck" not in text and \
+                    (via_client or any(h in text for h in GAME_LAUNCH_HINTS) and not client):
                 unresolved.append(s["name"])
             continue
         folder = os.path.normpath(folder)

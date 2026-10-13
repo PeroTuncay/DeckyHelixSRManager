@@ -11,11 +11,11 @@ folder costs one shallow `scan_folder`, as a Steam game does).
 | Source | Read from | Id in the plugin |
 |---|---|---|
 | Steam | `appmanifest_*.acf` (unchanged) | Steam app id |
-| Unifideck | `~/.local/share/unifideck/games.map`: `store:id=<exe>\t<work dir>\t<signed shortcut appid>` | `unifideck:<store:id>` |
+| Unifideck | `~/.local/share/unifideck/games.map`: `store:id=<exe>\t<work dir>\t<signed shortcut appid>`, or the older `store:id\|<exe>\|<work dir>` with the appid in `shortcuts_registry.json` (seen on a Deck); cloud entries `store:id\|xcloud\|<url>` are skipped | `unifideck:<store:id>` |
 | Heroic (GOG, Amazon, Epic) | `gog_store/installed.json`, `nile_config/installed.json`, `legendaryConfig/legendary/installed.json` under `~/.config/heroic/` and the Flatpak `~/.var/app/com.heroicgameslauncher.hgl/config/heroic/` | `heroic:<sha1 of folder>`, `store` = GOG / Amazon / Epic |
 | Legendary (standalone) | `~/.config/legendary/installed.json` and the Flatpak `.../com.heroicgameslauncher.hgl/config/legendary/installed.json` | `legendary:<sha1>` |
 | Lutris | game configs `*.yml` (exe, prefix, working_dir) in `~/.config/lutris/games`, `~/.local/share/lutris/games` and the Flatpak `net.lutris.Lutris` folders, filtered by `pga.db` (read-only sqlite, installed Wine games, names) | `lutris:<sha1>` |
-| Steam shortcuts ("Add a non-Steam game") | `~/.local/share/Steam/userdata/*/config/shortcuts.vdf` (binary KeyValues): Exe is an existing `.exe`, or the start folder holds one. Launcher shortcuts whose game no other source lists go into "unresolved" (panel note suggesting "Add game folder") | `shortcut:<unsigned appid>` |
+| Steam shortcuts ("Add a non-Steam game") | `~/.local/share/Steam/userdata/*/config/shortcuts.vdf` (binary KeyValues): Exe is an existing `.exe` that isn't a store client (`LAUNCHER_EXES`: Battle.net, EA, Ubisoft, …), or the start folder holds one. Shortcuts that start a game through a launcher (`heroic://`, Lutris, a store client with arguments after `%command%`, …; `GAME_LAUNCH_HINTS`) and whose game no other source lists go into "unresolved" (panel note suggesting "Add game folder"); apps, emulators, the launchers themselves and Unifideck's own shortcuts get no note | `shortcut:<unsigned appid>` |
 | Added folders | panel button "Add game folder" (Decky's folder picker), stored in settings `custom_games` | `folder:<sha1 of path, 12 chars>` |
 
 A folder listed by several sources keeps the first (Steam, Unifideck, Heroic, Legendary, Lutris, shortcut, added
@@ -52,6 +52,10 @@ or one level down).
   exe refused), boundary (listed game folders allowed, others not), removal.
 
 ## To do / check on the Deck
+
+Checked on the Deck (2026-10-13): Decky's Python is 3.11 with `sqlite3`. Real shortcuts.vdf (654 shortcuts, 3 users,
+621 Unifideck cloud-game shortcuts, NonSteamLaunchers/Battle.net, Heroic Flatpak, emulators) and an older Unifideck
+games.map (pipe format) led to the launcher and format fixes above, with tests.
 
 1. Real Unifideck: does `games.map` exist at that path, do work dirs point at the game folders, do names come from
    the shortcuts? (Its format was read from Unifideck's source, `py_modules/unifideck/utils/paths.py`,

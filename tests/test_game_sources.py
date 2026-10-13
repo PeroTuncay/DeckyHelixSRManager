@@ -32,10 +32,10 @@ class BinaryVdfTest(unittest.TestCase):
 class SteamShortcutsTest(FakeHomeTest):
     def test_fields_unquoted_and_appid_unsigned(self):
         shortcuts_vdf([{"appid": -1000, "AppName": "Hades", "Exe": '"/g/Hades.exe"', "StartDir": '"/g/"',
-                        "LastPlayTime": 1760000000}])
+                        "LaunchOptions": "-dx12", "LastPlayTime": 1760000000}])
         (s,) = main.steam_shortcuts()
         self.assertEqual(s, {"appid": 0xFFFFFFFF - 999, "name": "Hades", "exe": "/g/Hades.exe", "startdir": "/g/",
-                             "last_played": 1760000000})
+                             "launch": "-dx12", "last_played": 1760000000})
 
     def test_lowercase_keys_and_several_users(self):
         shortcuts_vdf([{"appid": 1, "appname": "A", "exe": "/a.exe", "startdir": "/"}], user="1")
@@ -65,6 +65,26 @@ class UnifideckTest(FakeHomeTest):
         write(main.UNIFIDECK_MAP, f"gog:55={spire}/Spire.exe\t\tnotanumber\nepic:x=/nope/x.exe\t/nope\t1\nno equals\n")
         (g,) = main.unifideck_games([])
         self.assertEqual((g["path"], g["name"], g["shortcut_appid"]), (str(spire), "Spire", None))
+
+    def test_older_pipe_format_with_appids_from_the_registry_and_cloud_entries_skipped(self):
+        # as found on a Deck (April 2026 Unifideck): "store:id|exe|work dir", cloud games "store:id|xcloud|url"
+        crown = game(HOME / ".local/share/unifideck/prefixes/ubisoft/u1/pfx/drive_c/Games/Crown", "Crown.exe")
+        write(main.UNIFIDECK_MAP, "microsoft:9ABC|xcloud|https://www.xbox.com/play/launch/9ABC\n"
+                                  f"ubisoft:u1|{crown}/Crown.exe|{crown}/\n")
+        write(main.UNIFIDECK_REGISTRY, json.dumps({
+            "ubisoft:u1": {"appid": -1383214098, "appid_unsigned": 2911753198, "title": "Crown"},
+            "microsoft:9ABC": {"appid": -5, "title": "Cloud Game"}}))
+        shortcuts = [{"appid": 2911753198, "name": "The Crown™", "exe": "", "startdir": "", "last_played": 7}]
+        (g,) = main.unifideck_games(shortcuts)
+        self.assertEqual((g["appid"], g["name"], g["path"], g["shortcut_appid"], g["last_played"]),
+                         ("unifideck:ubisoft:u1", "The Crown™", str(crown), 2911753198, 7))
+
+    def test_broken_registry_still_lists_the_games(self):
+        crown = game(HOME / "Games/Crown", "Crown.exe")
+        write(main.UNIFIDECK_MAP, f"ubisoft:u1|{crown}/Crown.exe|{crown}\n")
+        write(main.UNIFIDECK_REGISTRY, "{not json")
+        (g,) = main.unifideck_games([])
+        self.assertEqual((g["name"], g["shortcut_appid"]), ("Crown", None))
 
 
 class HeroicLegendaryTest(FakeHomeTest):
@@ -131,7 +151,7 @@ class LutrisTest(FakeHomeTest):
 
 class ShortcutGamesTest(FakeHomeTest):
     def sc(self, **kw):
-        return {"appid": 5, "name": "Game", "exe": "", "startdir": "", "last_played": None, **kw}
+        return {"appid": 5, "name": "Game", "exe": "", "startdir": "", "launch": "", "last_played": None, **kw}
 
     def test_exe_start_folder_fallback_and_unresolved_launchers(self):
         hades = game(HOME / "Games/Hades", "Hades.exe")
@@ -140,10 +160,37 @@ class ShortcutGamesTest(FakeHomeTest):
         got = main.shortcut_games([
             self.sc(name="Hades", exe=f"{hades}/Hades.exe", startdir=f"{hades}/"),
             self.sc(appid=6, name="Celeste", exe="/usr/bin/env", startdir=str(celeste)),
-            self.sc(appid=7, name="Mystery", exe="flatpak", startdir=str(HOME)),
+            self.sc(appid=7, name="Mystery", exe="flatpak", startdir=str(HOME),
+                    launch='run com.heroicgameslauncher.hgl --no-gui "heroic://launch/legendary/Abc"'),
         ], unresolved)
         self.assertEqual([(g["name"], g["path"]) for g in got], [("Hades", str(hades)), ("Celeste", str(celeste))])
         self.assertEqual(unresolved, ["Mystery"])
+
+    def test_store_clients_are_never_listed_with_their_own_folder(self):
+        # as found on a Deck (NonSteamLaunchers): the client itself, and a game started through it
+        bnet = game(HOME / "pfx/drive_c/Program Files (x86)/Battle.net", "Battle.net.exe", "Battle.net Launcher.exe")
+        nsl = 'STEAM_COMPAT_DATA_PATH="/x/compatdata/NonSteamLaunchers/" %command%'
+        unresolved = []
+        got = main.shortcut_games([
+            self.sc(name="Battle.net", exe=f"{bnet}/Battle.net Launcher.exe", startdir=str(bnet), launch=nsl),
+            self.sc(appid=6, name="Diablo", exe=f"{bnet}/Battle.net.exe", startdir=str(bnet),
+                    launch=nsl + ' --exec="launch OSI"'),
+            self.sc(appid=7, name="Client folder", exe="/usr/bin/env", startdir=str(bnet)),
+        ], unresolved)
+        self.assertEqual(got, [])
+        self.assertEqual(unresolved, ["Diablo"])
+
+    def test_apps_emulators_unifideck_and_launchers_themselves_get_no_note(self):
+        unresolved = []
+        main.shortcut_games([
+            self.sc(name="Discord", exe="/usr/bin/flatpak", launch='"run" "com.discordapp.Discord"'),
+            self.sc(name="Metroid", exe="/emu/Ryujinx.sh", launch='"/roms/switch/Metroid.xci"'),
+            self.sc(name="Cloud Game", exe=f"{HOME}/homebrew/plugins/Unifideck/bin/unifideck-launcher"),
+            self.sc(name="Heroic Games Launcher", exe="flatpak",
+                    launch='"run" "--command=heroic-run" "com.heroicgameslauncher.hgl"'),
+            self.sc(name="NonSteamLaunchers", exe="", launch='STEAM_COMPAT_DATA_PATH="/x/NonSteamLaunchers/" %command%'),
+        ], unresolved)
+        self.assertEqual(unresolved, [])
 
 
 class AllGamesTest(FakeHomeTest):
@@ -152,8 +199,10 @@ class AllGamesTest(FakeHomeTest):
         write(main.UNIFIDECK_MAP, f"gog:1={w3}/witcher3.exe\t{w3}\t\n")
         write(HOME / ".config/heroic/gog_store/installed.json",
               json.dumps({"installed": [{"installPath": str(w3), "title": "The Witcher 3"}]}))
-        shortcuts_vdf([{"appid": 1, "AppName": "Witcher3", "Exe": "flatpak", "StartDir": str(HOME)},
-                       {"appid": 2, "AppName": "Unknown Launcher Game", "Exe": "flatpak", "StartDir": str(HOME)}])
+        heroic = 'run com.heroicgameslauncher.hgl --no-gui "heroic://launch/gog/1"'
+        shortcuts_vdf([{"appid": 1, "AppName": "Witcher3", "Exe": "flatpak", "StartDir": str(HOME), "LaunchOptions": heroic},
+                       {"appid": 2, "AppName": "Unknown Launcher Game", "Exe": "flatpak", "StartDir": str(HOME),
+                        "LaunchOptions": heroic}])
         enable_stores("unifideck", "heroic", "shortcuts")
         notes = []
         games = main.all_games(notes)
