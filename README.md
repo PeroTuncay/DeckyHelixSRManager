@@ -21,6 +21,9 @@ OptiScaler.
   notice if the author later replaces the zip) and build it with a progress bar. Several releases can sit side by side.
 - **Per game, two routes:** in place of a game's own FSR 3.1, or through the OptiScaler the game already has (for
   example from Decky Framegen), keeping your current FSR 4 selectable for comparison.
+- **Games from other stores (opt-in):** Unifideck, Heroic (GOG, Amazon, Epic), Legendary, Lutris and games added to
+  Steam by hand, each switched on in **Other Stores**, plus **Add game folder** for anything else. Only the folders the
+  stores name are read, so the game list stays fast.
 - **Safe changes:** refuses while the game is running or Steam is still updating it, warns about anti-cheat (online
   bans) and asks you to confirm, keeps the game's original files, and puts everything back on removal. Disable keeps
   HelixSR's files for a quick switch back.
@@ -31,7 +34,7 @@ OptiScaler.
   game session), shows OptiScaler settings that commonly get in the way (DLSS input off, Steam Input blocked, menu key),
   and has a network on/off switch to prove HelixSR is doing the upscaling.
 - **Settings per game** where the release supports them (sharpening from 1.8, the int8 network from 1.9, network resolution up to 1.4).
-- **Less scrolling:** HelixSR Installation, OptiScaler and "In place of the game's FSR 3.1" fold away (tap the
+- **Less scrolling:** HelixSR Installation, Other Stores, OptiScaler and "In place of the game's FSR 3.1" fold away (tap the
   header); a closed section shows a one-line summary, including warnings inside. Installation starts open.
 - **Plugin updates from the panel:** a newer release shows up at the top with an **Update** button; Decky installs it
   after you confirm.
@@ -44,9 +47,11 @@ OptiScaler.
 > game's own FSR 3.1. 1.5 and 1.6 instead replaced DLSS (`nvngx.dll`) through OptiScaler and needed a Steam launch
 > option; those releases were withdrawn upstream, but the plugin still supports a 1.5 you already downloaded.
 >
-> From 1.7, HelixSR's own setup also installs its own OptiScaler into your games when run in a terminal. The plugin
-> runs only the build part of that setup, so HelixSR's own game installer never starts; it then installs per game
-> itself, into the OptiScaler the game already has. Games already set up by HelixSR's own setup are shown, but left to
+> From 1.7, HelixSR's own setup also installs its own OptiScaler into your games when run in a terminal. Up to 1.8.1
+> the plugin runs only the build part of that setup, so HelixSR's own game installer never starts. From 1.9 (HelixSR's
+> setup may no longer be modified) the setup runs as published: after the build its game installer starts, gets no
+> answer and ends without changing any game. Either way the plugin then installs per game itself, into the OptiScaler
+> the game already has. Games already set up by HelixSR's own setup are shown, but left to
 > that setup, including 1.8.1's experimental "DLSS without OptiScaler" route (HelixSR's loader as `dxgi.dll` and
 > HelixSR as `nvngx.dll` next to the game's exe), which the plugin doesn't offer itself. A setup whose layout the plugin
 > doesn't recognize isn't run.
@@ -90,6 +95,8 @@ replaces the old version in that game; no cleanup is needed first.
 ### 3. Install HelixSR into a game
 
 Pick the game under **Game Configuration** (the list shows games with an FSR 3.1 DLL or OptiScaler; turn off the filter to see all).
+Games from other stores appear there once their store is switched on in **Other Stores** (see
+[Games from other stores](#games-from-other-stores)).
 Close the game first: the plugin refuses to change its files while it runs or while Steam is still installing or
 updating it. If the game ships anti-cheat (EasyAntiCheat, BattlEye, …), the plugin warns that online play could get
 your account banned and only installs after you turn on **I understand the risk** for that game.
@@ -143,6 +150,29 @@ live side-by-side comparison, switch between "FSR HelixSR (3.1.5)" and FSR 3.1.5
 - **Undo completely:** **Revert OptiScaler to previous upscaler** or **Restore the game's FSR** (plus **Remove HelixSR
   launch option** for 1.5.x). The game's original files and settings come back as they were.
 
+## Games from other stores
+
+Steam games are always listed. Games from other stores are **opt-in**: open **Other Stores** (between HelixSR
+Installation and Game Configuration) and switch on the stores you use. Each toggle shows how many games it found, or
+"Not found on this device". A store that is off isn't read at all.
+
+| Store | Where the plugin finds the games |
+|---|---|
+| **Unifideck** (GOG, Epic, Amazon, Ubisoft, …) | Unifideck's list of installed games (`~/.local/share/unifideck/games.map`), named after their Steam shortcuts |
+| **Heroic Games Launcher** (GOG, Amazon, Epic; native and Flatpak) | Heroic's `installed.json` files |
+| **Legendary** (Epic) | Legendary's `installed.json` |
+| **Lutris** | Lutris' game configs and its database (read-only; installed Windows games only). Not tested on a real device yet. |
+| **Non-Steam games in Steam** | Steam's shortcuts that start a game's `.exe` directly (Steam → "Add a non-Steam game") |
+
+In the game list, each of these games carries its source ("· Heroic (GOG)", "· Unifideck", …). Shortcuts that start a
+game through a launcher can't name the game's folder; the section lists them and suggests **Add game folder**, which
+adds any game by picking its install folder (and **Remove from the list** takes it out again; the game's files stay).
+
+The plugin only reads the folders the stores name; it never crawls whole drives. It only ever changes files inside a
+listed game's own folder: never `/`, your home folder, a whole drive or SD card, and nothing of a store that is off.
+The running-game check works for these games too (by the game's `.exe` inside its folder); "Steam is updating it" only
+applies to Steam games.
+
 ## What it does
 
 1. **HelixSR release**: a dropdown of every release on
@@ -184,18 +214,22 @@ next to HelixSR, since HelixSR has none of its own; OptiScaler's own frame gener
    releases (1.4.3 is HelixSR 1.3.0 again: auto/fast/full; 1.4.0-1.4.2: auto/full/QSSM/PRSM). 1.5+ has no settings
    file; only the experimental network switch is offered there.
 9. **Safety checks**: no change to a game's files while it runs (detected through Steam's process environment or a
-   Windows program inside the game folder) or while Steam is still installing/updating it (`StateFlags`, download
+   Windows program inside the game folder; for games from other stores by the folder alone) or while Steam is still installing/updating it (`StateFlags`, download
    folder). Games with anti-cheat files (EasyAntiCheat, BattlEye, …) need an explicit "I understand the risk" before
    installing; removing is always allowed.
 10. **Disable / Enable**: a direct install parks HelixSR's DLL as `*.helixsr-disabled.dll` and puts the game's file
     back; an OptiScaler install restores the previous `OptiScaler.ini` values and keeps the `HelixSR` folder. Enable
     switches back without downloading or building anything.
+11. **Other stores** (opt-in): reads the install lists of Unifideck, Heroic, Legendary and Lutris and Steam's
+    `shortcuts.vdf` (each file size-capped, the Lutris database read-only), plus folders added by hand. Each listed
+    game's folder becomes the only place the plugin may change files for that game.
 
 ## Build
 
 ```
 npm install
 npm run package     # -> out/HelixSR-Manager.zip
+npm test            # unit tests (Python's unittest, no extra packages)
 ```
 
 ## Notes
@@ -207,6 +241,9 @@ npm run package     # -> out/HelixSR-Manager.zip
   `~/HelixSR/v1.4.1/helixsr-setup.sh`; the plugin picks up the built DLL afterwards.
 - Direct3D 12 only. Vulkan games aren't supported by HelixSR.
 - Close the game before installing or reverting.
+- Where other stores keep their install lists (and their formats) was learned from
+  [HelixSR-Decky](https://github.com/dawoodtogoo2020-code/HelixSR-Decky) (MIT) and from
+  [Unifideck](https://github.com/mubaraknumann/unifideck)'s source; the code here is our own.
 
 ## Known game issues
 
