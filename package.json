@@ -1,12 +1,13 @@
 {
   "name": "decky-helixsr",
-  "version": "0.9.3",
+  "version": "0.10.0",
   "description": "Install HelixSR (DLSS-based FSR 3.1 replacement) into Steam games, directly or through OptiScaler",
   "type": "module",
   "scripts": {
     "build": "rollup -c",
     "watch": "rollup -c -w",
-    "package": "rollup -c && node scripts/package.mjs"
+    "package": "rollup -c && node scripts/package.mjs",
+    "test": "python3 -m unittest discover -s tests -v"
   },
   "keywords": ["decky", "plugin", "steam-deck", "helixsr", "optiscaler", "fsr"],
   "author": "PeroTuncay",

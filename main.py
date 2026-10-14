@@ -15,6 +15,7 @@ Runs as the Deck user (no root flag): every file it touches lives in the user's 
 """
 import asyncio
 import errno
+import hashlib
 import json
 import os
 import re
@@ -362,8 +363,418 @@ def installed_games():
     return games
 
 
-def game_roots():
+# --- games from other stores (non-Steam) ------------------------------------------------------------------------------
+# Only folders a store or the user named as a game's install folder are read, never whole drives, so the list stays as
+# fast as Steam's. Each such folder also becomes an allowed root for file changes (game_roots), one game at a time.
+
+UNIFIDECK_MAP = HOME / ".local/share/unifideck/games.map"   # Unifideck: "store:id=<exe>\t<work dir>\t<shortcut appid>",
+UNIFIDECK_REGISTRY = UNIFIDECK_MAP.with_name("shortcuts_registry.json")  # older: "store:id|<exe>|<work dir>" + this
+HEROIC_DIRS = [HOME / ".config/heroic", HOME / ".var/app/com.heroicgameslauncher.hgl/config/heroic"]   # native, Flatpak
+HEROIC_FILES = [("gog_store/installed.json", "GOG"), ("nile_config/installed.json", "Amazon"),
+                ("legendaryConfig/legendary/installed.json", "Epic")]
+LEGENDARY_FILES = [HOME / ".config/legendary/installed.json",
+                   HOME / ".var/app/com.heroicgameslauncher.hgl/config/legendary/installed.json"]
+LUTRIS = [  # (game configs, database), native and Flatpak
+    (HOME / ".config/lutris/games", HOME / ".local/share/lutris/pga.db"),
+    (HOME / ".local/share/lutris/games", HOME / ".local/share/lutris/pga.db"),
+    (HOME / ".var/app/net.lutris.Lutris/config/lutris/games", HOME / ".var/app/net.lutris.Lutris/data/lutris/pga.db"),
+    (HOME / ".var/app/net.lutris.Lutris/data/lutris/games", HOME / ".var/app/net.lutris.Lutris/data/lutris/pga.db"),
+]
+# size caps for what's read from other programs, so a broken or huge file can't stall the game list
+MAX_VDF, MAX_JSON, MAX_YML, MAX_MAP, MAX_DB = 8 << 20, 16 << 20, 128 << 10, 4 << 20, 256 << 20
+
+
+def read_capped(path, limit):
+    """A file's bytes, or None if it's missing, unreadable or larger than limit."""
+    try:
+        p = Path(path)
+        if not p.is_file() or p.stat().st_size > limit:
+            return None
+        return p.read_bytes()
+    except OSError:
+        return None
+
+
+def read_json_capped(path):
+    data = read_capped(path, MAX_JSON)
+    try:
+        return json.loads(data) if data else None
+    except ValueError:
+        return None
+
+
+def read_binary_vdf(data):
+    """Steam's binary KeyValues (shortcuts.vdf): 0x00 nested map, 0x01 string, 0x02 int32, 0x08 end of map."""
+    pos = 0
+
+    def cstr():
+        nonlocal pos
+        end = data.index(b"\0", pos)
+        s = data[pos:end].decode("utf-8", "replace")
+        pos = end + 1
+        return s
+
+    def node():
+        nonlocal pos
+        out = {}
+        while pos < len(data):
+            t = data[pos]
+            pos += 1
+            if t == 0x08:
+                return out
+            key = cstr()
+            if t == 0x00:
+                out[key] = node()
+            elif t == 0x01:
+                out[key] = cstr()
+            elif t == 0x02:
+                out[key] = struct.unpack_from("<i", data, pos)[0]
+                pos += 4
+            elif t == 0x07:
+                out[key] = struct.unpack_from("<Q", data, pos)[0]
+                pos += 8
+            else:
+                raise ValueError(f"unknown KeyValues type {t}")
+        return out
+
+    return node()
+
+
+def steam_shortcuts():
+    """Non-Steam shortcuts of every Steam user on the device: appid (unsigned), name, exe, start dir, last played."""
+    out, seen = [], set()
+    for sroot in steam_roots():
+        for f in sroot.glob("userdata/*/config/shortcuts.vdf"):
+            try:
+                key = f.resolve()
+                if key in seen:
+                    continue
+                seen.add(key)
+                raw = read_capped(f, MAX_VDF)
+                if raw is None:
+                    continue
+                data = read_binary_vdf(raw)
+            except (OSError, ValueError, struct.error, IndexError):
+                continue
+            for s in (data.get("shortcuts") or {}).values():
+                if not isinstance(s, dict):
+                    continue
+                low = {k.lower(): v for k, v in s.items()}
+                out.append({"appid": int(low.get("appid") or 0) & 0xFFFFFFFF, "name": str(low.get("appname") or ""),
+                            "exe": str(low.get("exe") or "").strip().strip('"'),
+                            "startdir": str(low.get("startdir") or "").strip().strip('"'),
+                            "launch": str(low.get("launchoptions") or ""),
+                            "last_played": int(low.get("lastplaytime") or 0) or None})
+    return out
+
+
+def unifideck_registry():
+    """Older Unifideck versions keep the shortcut appid per game in shortcuts_registry.json, not in games.map."""
+    raw = read_capped(UNIFIDECK_REGISTRY, MAX_JSON)
+    try:
+        data = json.loads(raw) if raw is not None else {}
+    except ValueError:
+        return {}
+    out = {}
+    for key, v in (data.items() if isinstance(data, dict) else []):
+        if isinstance(v, dict) and isinstance(v.get("appid"), int):
+            out[key] = v["appid"]
+    return out
+
+
+def unifideck_games(shortcuts):
+    """Installed games from Unifideck's games.map (GOG, Epic, Amazon, Ubisoft, …), named after their Steam shortcut.
+    Two formats exist: "store:id=<exe>\t<work dir>\t<signed appid>" and the older "store:id|<exe>|<work dir>" (appid in
+    shortcuts_registry.json). Cloud-streaming entries ("…|xcloud|<url>") have no folder and are skipped."""
+    raw = read_capped(UNIFIDECK_MAP, MAX_MAP)
+    if raw is None:
+        return []
+    lines = raw.decode("utf-8", "replace").splitlines()
+    by_appid = {s["appid"]: s for s in shortcuts}
+    registry = None
+    out = []
+    for line in lines:
+        eq, bar = line.find("="), line.find("|")
+        if bar > 0 and (eq < 0 or bar < eq):
+            sep = "|"
+        elif eq > 0:
+            sep = "="
+        else:
+            continue
+        key, rest = line.split(sep, 1)
+        parts = rest.split("\t" if sep == "=" else "|")
+        exe = parts[0].strip()
+        if not exe.startswith("/"):   # e.g. "xcloud": streamed, nothing on disk
+            continue
+        folder = os.path.normpath(parts[1].strip() if len(parts) > 1 and parts[1].strip() else os.path.dirname(exe))
+        appid = None
+        if sep == "=":
+            try:
+                appid = int(parts[2]) & 0xFFFFFFFF if len(parts) > 2 and parts[2].strip() else None
+            except ValueError:
+                pass
+        else:
+            registry = unifideck_registry() if registry is None else registry
+            appid = registry[key.strip()] & 0xFFFFFFFF if key.strip() in registry else None
+        if not folder or not os.path.isdir(folder):
+            continue
+        sc = by_appid.get(appid) if appid else None
+        out.append({"appid": f"unifideck:{key.strip()}", "name": (sc or {}).get("name") or Path(folder).name,
+                    "path": folder, "source": "unifideck", "shortcut_appid": appid,
+                    "last_played": (sc or {}).get("last_played")})
+    return out
+
+
+def exe_names(folder):
+    try:
+        with os.scandir(folder) as it:
+            return [e.name for e in it if e.is_file() and e.name.lower().endswith(".exe")]
+    except OSError:
+        return []
+
+
+def has_exe(folder):
+    return bool(exe_names(folder))
+
+
+# Store clients: a shortcut that starts one of these runs the client (or a game through it), so the exe's folder is the
+# client's, not a game's
+LAUNCHER_EXES = {"battle.net.exe", "battle.net launcher.exe", "eadesktop.exe", "ealauncher.exe", "origin.exe",
+                 "upc.exe", "ubisoftconnect.exe", "uplay.exe", "epicgameslauncher.exe", "galaxyclient.exe",
+                 "amazon games.exe", "amazon games ui.exe", "itch.exe", "playnite.desktopapp.exe",
+                 "playnite.fullscreenapp.exe", "rockstarservice.exe"}
+# Launch options or exe of a shortcut that starts a Windows game through a launcher (worth the "Add game folder" note);
+# other shortcuts (apps, emulators, streaming) aren't mentioned
+# (NonSteamLaunchers games start a store client with arguments: covered by LAUNCHER_EXES)
+GAME_LAUNCH_HINTS = ("heroic://", "lutris:rungame", "legendary launch", "nile launch", "gogdl", "bottles-cli run")
+
+
+def shortcut_games(shortcuts, unresolved=None):
+    """Non-Steam shortcuts that start a Windows game: their exe directly, or a start folder holding an .exe (e.g. "Add
+    a non-Steam game"). Shortcuts that start a store client (Battle.net, EA, Ubisoft, …) or go through a launcher
+    (Heroic, Lutris, …) can't name the game's folder; those that start a game go into unresolved, so the panel can
+    suggest "Add game folder". Unifideck's shortcuts are left to its own source; apps and emulators are ignored."""
+    out = []
+    for s in shortcuts:
+        exe, start, launch = s["exe"], s["startdir"], s.get("launch", "")
+        client = os.path.basename(exe).lower() in LAUNCHER_EXES
+        if exe.lower().endswith(".exe") and os.path.isfile(exe) and not client:
+            folder = start if start and os.path.isdir(start) else os.path.dirname(exe)
+        elif not client and start and (exes := exe_names(start)) and not any(e.lower() in LAUNCHER_EXES for e in exes):
+            folder = start
+        else:
+            text = f"{exe} {launch}".lower()
+            # a client started with arguments after %command% starts a game through it (e.g. Battle.net --exec=…)
+            via_client = client and launch.split("%command%", 1)[-1].strip() != "" and "%command%" in launch
+            if unresolved is not None and s["name"] and exe and "unifideck" not in text and \
+                    (via_client or any(h in text for h in GAME_LAUNCH_HINTS) and not client):
+                unresolved.append(s["name"])
+            continue
+        folder = os.path.normpath(folder)
+        out.append({"appid": f"shortcut:{s['appid']}", "name": s["name"] or Path(folder).name, "path": folder,
+                    "source": "shortcut", "shortcut_appid": s["appid"], "last_played": s["last_played"]})
+    return out
+
+
+def store_game(source, store, folder, title):
+    folder = os.path.normpath(str(folder))
+    return {"appid": f"{source}:" + hashlib.sha1(os.path.realpath(folder).encode()).hexdigest()[:12],
+            "name": str(title or Path(folder).name), "path": folder, "source": source, "store": store}
+
+
+def heroic_games():
+    """Games installed through Heroic (GOG, Amazon, Epic), native or Flatpak: its installed.json files."""
+    out = []
+    for base in HEROIC_DIRS:
+        for rel, store in HEROIC_FILES:
+            data = read_json_capped(base / rel)
+            items = data.get("installed", data) if isinstance(data, dict) else data
+            if isinstance(items, dict):
+                items = list(items.values())
+            for g in items if isinstance(items, list) else []:
+                if not isinstance(g, dict):
+                    continue
+                folder = g.get("install_path") or g.get("installPath")
+                if isinstance(folder, str) and folder and os.path.isdir(folder):
+                    out.append(store_game("heroic", store, folder, g.get("title") or g.get("appName")))
+    return out
+
+
+def legendary_games():
+    """Epic games installed with the standalone Legendary (native or Flatpak)."""
+    out = []
+    for f in LEGENDARY_FILES:
+        data = read_json_capped(f)
+        for g in data.values() if isinstance(data, dict) else []:
+            folder = g.get("install_path") if isinstance(g, dict) else None
+            if isinstance(folder, str) and folder and os.path.isdir(folder):
+                out.append(store_game("legendary", "Epic", folder, g.get("title")))
+    return out
+
+
+def lutris_installed(db):
+    """{config name: (name, directory)} of installed Wine games in a Lutris database, read-only; None if unreadable
+    (or no sqlite3 in this Python)."""
+    if read_capped_size(db) is None:
+        return None
+    try:
+        import sqlite3
+        con = sqlite3.connect(Path(db).resolve().as_uri() + "?mode=ro", uri=True, timeout=0.2)
+        try:
+            con.execute("PRAGMA query_only = ON")
+            cols = {r[1] for r in con.execute("PRAGMA table_info(games)")}
+            if not {"name", "directory", "configpath", "installed", "runner"} <= cols:
+                return None
+            rows = con.execute("SELECT name, directory, configpath FROM games WHERE installed = 1 AND runner = 'wine' "
+                               "AND configpath IS NOT NULL LIMIT 10000").fetchall()
+        finally:
+            con.close()
+    except Exception:
+        return None
+    return {str(c): (n, d) for n, d, c in rows if isinstance(c, str) and c and "/" not in c}
+
+
+def read_capped_size(path):
+    try:
+        p = Path(path)
+        return p.stat().st_size if p.is_file() and p.stat().st_size <= MAX_DB else None
+    except OSError:
+        return None
+
+
+def lutris_games():
+    """Wine games installed through Lutris (native or Flatpak): the game configs' exe, filtered by its database."""
+    out, dbs = [], {}
+    for configs, db in LUTRIS:
+        if db not in dbs:
+            dbs[db] = lutris_installed(db)
+        installed = dbs[db]
+        try:
+            ymls = list(configs.glob("*.yml"))
+        except OSError:
+            continue
+        for y in ymls:
+            if installed is not None and y.stem not in installed:
+                continue
+            text = (read_capped(y, MAX_YML) or b"").decode("utf-8", "replace")
+            field = lambda k: (re.search(r"(?m)^\s*%s:\s*['\"]?(.+?)['\"]?\s*$" % k, text) or [None, ""])[1]
+            name, directory = (installed or {}).get(y.stem, (None, ""))
+            exe = field("exe")
+            if not exe.lower().endswith(".exe"):
+                continue
+            bases = [""] if os.path.isabs(exe) else [directory, field("working_dir"), field("prefix")]
+            for b in bases:
+                p = Path(os.path.expanduser(os.path.join(b, exe))) if b or os.path.isabs(exe) else None
+                if p and p.is_absolute() and p.is_file():
+                    out.append(store_game("lutris", "Lutris", p.parent, name or field("name") or y.stem))
+                    break
+    return out
+
+
+def custom_game_id(folder):
+    return "folder:" + hashlib.sha1(os.path.realpath(folder).encode()).hexdigest()[:12]
+
+
+def custom_games():
+    """Game folders the user added in the panel ("Add game folder")."""
+    return [{"appid": custom_game_id(p), "name": Path(p).name, "path": p, "source": "folder"}
+            for p in load_settings().get("custom_games", []) if os.path.isdir(p)]
+
+
+# Other stores are opt-in (panel section "Other Stores"): nothing of a store is read, listed or allowed for changes until
+# its switch is on. Added folders ("Add game folder") need no switch: adding one is the opt-in.
+STORES = [  # (id, label, what it covers)
+    ("unifideck", "Unifideck", "GOG, Epic, Amazon, Ubisoft and more, installed through the Unifideck plugin"),
+    ("heroic", "Heroic Games Launcher", "GOG, Epic and Amazon games installed through Heroic"),
+    ("legendary", "Legendary", "Epic games installed with the Legendary command-line client"),
+    ("lutris", "Lutris", "Windows games installed through Lutris"),
+    ("shortcuts", "Non-Steam games in Steam", "Games added with Steam's \"Add a non-Steam game\""),
+]
+
+
+def enabled_stores():
+    on = load_settings().get("stores", {})
+    return {sid for sid, _, _ in STORES if on.get(sid)}
+
+
+def store_found(sid):
+    """Whether a store's files exist on this device (cheap: no game folders are opened)."""
+    if sid == "unifideck":
+        return UNIFIDECK_MAP.is_file()
+    if sid == "heroic":
+        return any((b / rel).is_file() for b in HEROIC_DIRS for rel, _ in HEROIC_FILES)
+    if sid == "legendary":
+        return any(f.is_file() for f in LEGENDARY_FILES)
+    if sid == "lutris":
+        return any(c.is_dir() or db.is_file() for c, db in LUTRIS)
+    if sid == "shortcuts":
+        return any(any(r.glob("userdata/*/config/shortcuts.vdf")) for r in steam_roots())
+    return False
+
+
+def store_games(sid, shortcuts, unresolved=None):
+    if sid == "unifideck":
+        return unifideck_games(shortcuts)
+    if sid == "heroic":
+        return heroic_games()
+    if sid == "legendary":
+        return legendary_games()
+    if sid == "lutris":
+        return lutris_games()
+    if sid == "shortcuts":
+        return shortcut_games(shortcuts, unresolved)
+    return []
+
+
+def all_games(notes=None):
+    """Steam games plus games from the stores switched on, plus added folders, by id. A folder listed twice keeps its
+    first source (Steam, Unifideck, Heroic, Legendary, Lutris, a shortcut, an added folder). With a list for notes, the
+    names of Steam shortcuts whose game folder couldn't be found (and that no other source listed) are added to it."""
+    games = {k: {**g, "source": "steam"} for k, g in installed_games().items()}
+    seen = {os.path.realpath(g["path"]) for g in games.values()}
+    on = enabled_stores()
+    shortcuts = steam_shortcuts() if on & {"unifideck", "shortcuts"} else []   # Unifideck: names from its shortcuts
+    unresolved = []
+    found = [g for sid, _, _ in STORES if sid in on for g in store_games(sid, shortcuts, unresolved)]
+    for g in [*found, *custom_games()]:
+        rp = os.path.realpath(g["path"])
+        if rp in seen or not safe_game_folder(rp):
+            continue
+        seen.add(rp)
+        games[g["appid"]] = g
+    if notes is not None:
+        names = {g["name"].strip().lower() for g in games.values()}
+        notes.extend(n for n in unresolved if n.strip().lower() not in names)
+    return games
+
+
+def safe_game_folder(folder):
+    """A folder that can be a single game's folder: not /, not a home folder, not a whole Steam library or drive."""
+    rp = os.path.realpath(folder)
+    parts = Path(rp).parts
+    if len(parts) < 3 or rp == os.path.realpath(HOME) or rp in game_roots_steam():
+        return False
+    if rp.startswith("/run/media/") and len(parts) <= 5:   # /run/media/<user>/<drive>: a whole SD card or drive
+        return False
+    return True
+
+
+def game_roots_steam():
     return [str((sa / "common").resolve()) for sa in steamapps_dirs()]
+
+
+def game_roots():
+    """Folders whose files the plugin may change: Steam libraries' common folders plus each non-Steam game's folder."""
+    return game_roots_steam() + [os.path.realpath(g["path"]) for g in all_games().values() if g["source"] != "steam"]
+
+
+def steam_appid(game):
+    """The Steam app id for Steam-only lookups (running process env, localconfig, downloads), None for other stores."""
+    return game["appid"] if game.get("source", "steam") == "steam" else None
+
+
+def game_last_played(game):
+    return last_played(game["appid"]) if steam_appid(game) else game.get("last_played")
 
 
 def inside_library(p):
@@ -880,8 +1291,15 @@ def plugin_version():
 
 
 def version_key(v):
-    """'0.9.1', 'v0.9.1' or a tag like 'v.0.8.3' -> (0, 9, 1) for comparing."""
-    return tuple(int(n) for n in re.findall(r"\d+", v or "")[:3]) or (0,)
+    """'0.9.1', 'v0.9.1' or a tag like 'v.0.8.3' -> (0, 9, 1, 0) for comparing. A pre-release ('0.10.0-beta.1') sorts
+    below its release: (0, 10, 0, -1, 1) < (0, 10, 0, 0)."""
+    m = re.match(r"\D*(\d+(?:\.\d+)*)(.*)", (v or "").strip())
+    if not m:
+        return (0,)
+    nums = [int(n) for n in m.group(1).split(".")[:3]]
+    nums += [0] * (3 - len(nums))
+    rest = re.findall(r"\d+", m.group(2))
+    return (*nums, -1, *(int(n) for n in rest[:1])) if m.group(2).strip(" .-+") else (*nums, 0)
 
 
 def ini_holds_only_defaults(text, defaults=None):
@@ -1944,7 +2362,8 @@ class Plugin:
     async def list_games(self):
         def work():
             out = []
-            for g in installed_games().values():
+            notes = []
+            for g in all_games(notes).values():
                 dlss_dirs = []
                 dlls, opti = scan_folder(g["path"], None, dlss_dirs)
                 targets = direct_targets(dlls)
@@ -1952,13 +2371,73 @@ class Plugin:
                     any(installed_kind(o) is not None for o in opti) or bool(dlss_dirs)
                 out.append({**g, "fsr": bool(targets), "optiscaler": bool(opti), "helixsr": installed})
             out.sort(key=lambda x: x["name"].lower())
+            self.unresolved_shortcuts = sorted(set(notes), key=str.lower)
             return out
         games = await asyncio.to_thread(work)
         self.games_cache = {g["appid"]: g for g in games}
         return games
 
+    async def add_custom_game(self, path):
+        """Adds one game's folder from another store (or anything else) to the list."""
+        def work():
+            p = os.path.realpath(os.path.expanduser((path or "").strip()))
+            if not os.path.isdir(p):
+                raise RuntimeError("That folder doesn't exist.")
+            if not safe_game_folder(p):
+                raise RuntimeError("Pick one game's folder, not a whole drive, library or your home folder.")
+            with os.scandir(p) as it:
+                subdirs = [x.path for x in it if x.is_dir()]
+            if not any(has_exe(d) for d in (p, *subdirs)):
+                raise RuntimeError("No Windows game (.exe) found in that folder or the folders directly inside it.")
+            s = load_settings()
+            lst = s.setdefault("custom_games", [])
+            if p not in lst:
+                lst.append(p)
+                save_settings(s)
+            return {"ok": True, "appid": custom_game_id(p), "message": f"Added {Path(p).name}."}
+        try:
+            return await asyncio.to_thread(work)
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
+    async def remove_custom_game(self, appid):
+        """Removes an added folder from the list again (its files aren't touched)."""
+        s = load_settings()
+        s["custom_games"] = [p for p in s.get("custom_games", []) if custom_game_id(p) != appid]
+        save_settings(s)
+        return {"ok": True, "message": "Removed from the list. The game's files are unchanged."}
+
+    async def get_stores(self):
+        """The other stores for the panel: label, what they cover, switched on, found on this device, games found."""
+        def work():
+            on = enabled_stores()
+            shortcuts = steam_shortcuts() if store_found("shortcuts") or store_found("unifideck") else []
+            out = []
+            for sid, label, desc in STORES:
+                found = store_found(sid)
+                count = len([g for g in store_games(sid, shortcuts) if safe_game_folder(g["path"])]) if found else 0
+                out.append({"id": sid, "label": label, "description": desc, "enabled": sid in on, "found": found,
+                            "count": count})
+            return out
+        return await asyncio.to_thread(work)
+
+    async def set_store(self, sid, enabled):
+        if sid not in {s for s, _, _ in STORES}:
+            return {"ok": False, "error": "Unknown store."}
+        s = load_settings()
+        s.setdefault("stores", {})[sid] = bool(enabled)
+        save_settings(s)
+        return {"ok": True}
+
+    async def get_unresolved_shortcuts(self):
+        """Steam shortcuts (from the last game scan) that start a launcher whose game folder isn't known."""
+        return getattr(self, "unresolved_shortcuts", [])
+
+    async def home_dir(self):
+        return str(HOME)
+
     def _game(self, appid):
-        g = self.games_cache.get(appid) or installed_games().get(appid)
+        g = self.games_cache.get(appid) or all_games().get(appid)
         if not g:
             raise RuntimeError("Game not found. Refresh the list.")
         return g
@@ -1995,7 +2474,7 @@ class Plugin:
                     st["helix_folder"] = str(sub)
                     optis.append(st)
                 acks = load_settings().get("anticheat_ack", {})
-                procs = game_processes(folder, g["appid"])
+                procs = game_processes(folder, steam_appid(g))
                 starts = [p["started"] for p in procs if p["started"]]
                 official_dlss = [{"dir": str(d), "rel": os.path.relpath(d, folder),
                                   "helix_version": helix_version(d / DLL_NGX), "check": helix_log_check(d)}
@@ -2006,7 +2485,7 @@ class Plugin:
                         "steam_busy": steam_busy(g),
                         # when the current (running) or last game session started, to judge how fresh a log is
                         "session": {"running": bool(procs), "started": min(starts) if starts else None,
-                                    "last_played": last_played(g["appid"])},
+                                    "last_played": game_last_played(g)},
                         "anticheat": anticheat, "anticheat_ack": bool(acks.get(str(g["appid"])))}
             return await asyncio.to_thread(work)
         except Exception as e:
@@ -2017,11 +2496,11 @@ class Plugin:
         """Refuses a change to a game's files while the game runs, while Steam still writes them, or (installing only)
         in a game with anti-cheat that hasn't been acknowledged in the panel."""
         rp = os.path.realpath(path)
-        game = next((g for g in installed_games().values()
+        game = next((g for g in all_games().values()
                      if rp == os.path.realpath(g["path"]) or rp.startswith(os.path.realpath(g["path"]) + os.sep)), None)
         if game is None:
             return
-        running = sorted((r["name"] for r in game_processes(game["path"], game["appid"])),
+        running = sorted((r["name"] for r in game_processes(game["path"], steam_appid(game))),
                          key=lambda n: ".exe" not in n.lower())
         if running:
             raise RuntimeError(f"{game['name']} is running ({', '.join(running[:2])}). Close it first.")

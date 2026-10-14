@@ -14,7 +14,7 @@ import {
   showModal,
   staticClasses,
 } from "@decky/ui";
-import { addEventListener, callable, definePlugin, removeEventListener, toaster } from "@decky/api";
+import { FileSelectionType, addEventListener, callable, definePlugin, openFilePicker, removeEventListener, toaster } from "@decky/api";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FaDna } from "react-icons/fa";
 
@@ -178,11 +178,37 @@ const INT8 = [
 ];
 const SHARPNESS = ["0.1", "0.2", "0.3", "0.4", "0.5", "0.6", "0.7", "0.8", "0.9", "1.0"];
 
-type GameSummary = { appid: string; name: string; path: string; fsr: boolean; optiscaler: boolean; helixsr: boolean };
+// source: where the game comes from. Non-Steam games: Unifideck's games.map, Steam shortcuts that start a game's .exe,
+// or a folder the user added.
+type GameSource = "steam" | "unifideck" | "heroic" | "legendary" | "lutris" | "shortcut" | "folder";
+type GameSummary = {
+  appid: string;
+  name: string;
+  path: string;
+  source: GameSource;
+  store?: string; // Heroic: GOG / Amazon / Epic
+  fsr: boolean;
+  optiscaler: boolean;
+  helixsr: boolean;
+};
+const SOURCE_LABEL: Record<GameSource, string> = {
+  steam: "",
+  unifideck: "Unifideck",
+  heroic: "Heroic",
+  legendary: "Legendary",
+  lutris: "Lutris",
+  shortcut: "non-Steam",
+  folder: "added folder",
+};
+const sourceLabel = (g: { source: GameSource; store?: string }) =>
+  g.source === "heroic" && g.store ? `Heroic (${g.store})` : SOURCE_LABEL[g.source];
 type GameDetail = Result & {
   appid: string;
   name: string;
   path: string;
+  source: GameSource;
+  store?: string;
+  shortcut_appid?: number | null; // a non-Steam game's Steam shortcut (launch options)
   direct: DirectTarget[];
   optiscaler: OptiTarget[];
   running: string[]; // processes of the game, if it runs
@@ -242,6 +268,13 @@ const cleanPreview = callable<[], { items: string[]; bytes: number }>("clean_pre
 const cleanAll = callable<[], Result>("clean");
 const listGames = callable<[], GameSummary[]>("list_games");
 const getGame = callable<[appid: string], GameDetail>("get_game");
+const addCustomGame = callable<[path: string], Result & { appid?: string }>("add_custom_game");
+const removeCustomGame = callable<[appid: string], Result>("remove_custom_game");
+const homeDir = callable<[], string>("home_dir");
+const getUnresolvedShortcuts = callable<[], string[]>("get_unresolved_shortcuts");
+type StoreInfo = { id: string; label: string; description: string; enabled: boolean; found: boolean; count: number };
+const getStores = callable<[], StoreInfo[]>("get_stores");
+const setStore = callable<[id: string, enabled: boolean], Result>("set_store");
 const installDirect = callable<[path: string, ignoreDx11?: boolean], Result>("install_direct");
 const uninstallDirect = callable<[path: string], Result>("uninstall_direct");
 const installOptiscaler = callable<[path: string, keepFsr4: boolean, ignoreDx11?: boolean], Result>("install_optiscaler");
@@ -1670,7 +1703,7 @@ function gameStatus(game: GameDetail, active: Active): { color: string; title: s
   };
 }
 
-function GameSection({ appid, active }: { appid: string; active: Active }) {
+function GameSection({ appid, active, onRemoved }: { appid: string; active: Active; onRemoved: () => void }) {
   const [game, setGame] = useState<GameDetail | null>(null);
   const [loading, setLoading] = useState(false);
   const [details, setDetails] = useStoredFlag("details");
@@ -1713,6 +1746,24 @@ function GameSection({ appid, active }: { appid: string; active: Active }) {
               {loading ? "Checking…" : "Check again"}
             </ButtonItem>
           </PanelSectionRow>
+          {game.source !== "steam" && (
+            <Note>
+              {game.source === "folder" ? "Added folder" : `From ${sourceLabel(game)}`}: {game.path}
+            </Note>
+          )}
+          {game.source === "folder" && (
+            <PanelSectionRow>
+              <ButtonItem
+                layout="below"
+                onClick={async () => {
+                  toast(await removeCustomGame(game.appid), "Game list");
+                  onRemoved();
+                }}
+              >
+                Remove from the list (files stay)
+              </ButtonItem>
+            </PanelSectionRow>
+          )}
           <PanelSectionRow>
             <ToggleField
               label="Show technical details"
@@ -1791,11 +1842,86 @@ function GameSection({ appid, active }: { appid: string; active: Active }) {
       {game.optiscaler.length > 0 && (
         <Accordion id="optiscaler" title="OptiScaler" summary={optiSummary(game.optiscaler)}>
           {game.optiscaler.map((o) => (
-            <OptiItem key={o.dir} o={o} active={active} appid={game.appid} guard={guard} session={game.session} details={details} reload={reload} />
+            <OptiItem key={o.dir} o={o} active={active} appid={game.source === "steam" ? game.appid : String(game.shortcut_appid ?? "")} guard={guard} session={game.session} details={details} reload={reload} />
           ))}
         </Accordion>
       )}
     </>
+  );
+}
+
+// --- other stores (opt-in) -------------------------------------------------------------------------------------------
+
+function OtherStoresSection({
+  unresolved,
+  rescan,
+  onAdded,
+}: {
+  unresolved: string[];
+  rescan: () => Promise<void>;
+  onAdded: (appid: string) => Promise<void>;
+}) {
+  const [stores, setStores] = useState<StoreInfo[] | null>(null);
+  const load = useCallback(() => {
+    getStores().then(setStores);
+  }, []);
+  useEffect(load, [load]);
+
+  const on = (stores ?? []).filter((s) => s.enabled);
+  const summary = on.length ? `On: ${on.map((s) => s.label).join(", ")}` : "Off: only Steam games are listed";
+  const showUnresolved = unresolved.length > 0 && on.some((s) => s.id === "shortcuts");
+
+  return (
+    <Accordion id="stores" title="Other Stores" summary={summary}>
+      <Note>
+        Games from other stores show up in the game list once you turn their store on. Nothing is read from a store
+        that is off.
+      </Note>
+      {stores === null && <Note>Looking for stores…</Note>}
+      {(stores ?? []).map((s) => (
+        <PanelSectionRow key={s.id}>
+          <ToggleField
+            label={s.label}
+            description={`${s.description}. ${
+              s.found ? (s.count === 1 ? "1 game found." : `${s.count} games found.`) : "Not found on this device."
+            }`}
+            checked={s.enabled}
+            disabled={!s.found && !s.enabled}
+            onChange={async (v) => {
+              await setStore(s.id, v);
+              load();
+              await rescan();
+            }}
+          />
+        </PanelSectionRow>
+      ))}
+      {showUnresolved && (
+        <Note>
+          {unresolved.length === 1 ? "One non-Steam shortcut starts" : `${unresolved.length} non-Steam shortcuts start`} a
+          launcher, so the game's folder isn't known: {unresolved.slice(0, 3).join(", ")}
+          {unresolved.length > 3 ? ` and ${unresolved.length - 3} more` : ""}. To use HelixSR there, add the game's folder
+          with "Add game folder".
+        </Note>
+      )}
+      <PanelSectionRow>
+        <ButtonItem
+          layout="below"
+          description="For a game that isn't listed: pick the folder it's installed in."
+          onClick={async () => {
+            try {
+              const picked = await openFilePicker(FileSelectionType.FOLDER, await homeDir(), false, true);
+              const r = await addCustomGame(picked.realpath || picked.path);
+              toast(r, "Game list");
+              if (r.ok && r.appid) await onAdded(r.appid);
+            } catch {
+              /* picker closed */
+            }
+          }}
+        >
+          Add game folder
+        </ButtonItem>
+      </PanelSectionRow>
+    </Accordion>
   );
 }
 
@@ -1887,6 +2013,7 @@ function Content() {
   const [selected, setSelected] = useState<string>(storage("selected", ""));
   const [scanning, setScanning] = useState(false);
   const [update, setUpdate] = useState<PluginUpdate | null>(null);
+  const [unresolved, setUnresolved] = useState<string[]>([]);
 
   const refreshHelix = useCallback(() => {
     getHelixState().then(setHelix);
@@ -1895,6 +2022,7 @@ function Content() {
   const scan = useCallback(async () => {
     setScanning(true);
     setGames(await listGames());
+    setUnresolved(await getUnresolvedShortcuts());
     setScanning(false);
   }, []);
 
@@ -1927,6 +2055,14 @@ function Content() {
     <>
       <PluginUpdateBanner update={update} />
       <HelixSection state={helix} refresh={refreshHelix} />
+      <OtherStoresSection
+        unresolved={unresolved}
+        rescan={scan}
+        onAdded={async (appid) => {
+          await scan();
+          pick(appid);
+        }}
+      />
       <PanelSection title="Game Configuration">
         <PanelSectionRow>
           <ToggleField
@@ -1948,7 +2084,7 @@ function Content() {
               label="Game"
               rgOptions={shown.map((g) => ({
                 data: g.appid,
-                label: `${g.name}${g.helixsr ? "  ✓" : ""}`,
+                label: `${g.name}${g.source !== "steam" ? ` · ${sourceLabel(g)}` : ""}${g.helixsr ? "  ✓" : ""}`,
               }))}
               selectedOption={current?.appid}
               strDefaultLabel="Select a game"
@@ -1979,6 +2115,7 @@ function Content() {
             version: helix?.version ?? null,
             kind: helix?.kind ?? null,
           }}
+          onRemoved={scan}
         />
       )}
       <AboutSection
