@@ -96,7 +96,10 @@ replaces the old version in that game; no cleanup is needed first.
 
 ### 3. Install HelixSR into a game
 
-Pick the game under **Game Configuration** (the list shows games with an FSR 3.1 DLL or OptiScaler; turn off the filter to see all).
+Pick the game under **Game Configuration** (the list shows games HelixSR can use: with an FSR 3.1 DLL or OptiScaler,
+and DLSS / XeSS / FSR 2 games, tagged "needs OptiScaler"; turn off the filter to see all). A DLSS or XeSS game without
+OptiScaler says what to do: install OptiScaler into it first (for example with the Decky Framegen plugin), then the
+OptiScaler section appears with the install button.
 Games from other stores appear there once their store is switched on in **Other Stores** (see
 [Games from other stores](#games-from-other-stores)).
 Close the game first: the plugin refuses to change its files while it runs or while Steam is still installing or

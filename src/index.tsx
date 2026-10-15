@@ -188,6 +188,7 @@ type GameSummary = {
   path: string;
   source: GameSource;
   store?: string; // Heroic: GOG / Amazon / Epic
+  inputs: string[]; // upscalers OptiScaler can take as input ("DLSS", "XeSS", "FSR 2")
   fsr: boolean;
   optiscaler: boolean;
   helixsr: boolean;
@@ -209,7 +210,9 @@ type GameDetail = Result & {
   path: string;
   source: GameSource;
   store?: string;
-  shortcut_appid?: number | null; // a non-Steam game's Steam shortcut (launch options)
+  shortcut_appid?: number | null;
+  inputs: string[]; // upscalers the game ships that OptiScaler can take as input
+  inputs_dx11: string | null; // the exe next to them looks DirectX 11 only // a non-Steam game's Steam shortcut (launch options)
   direct: DirectTarget[];
   optiscaler: OptiTarget[];
   running: string[]; // processes of the game, if it runs
@@ -1824,10 +1827,43 @@ function GameSection({ appid, active, onRemoved }: { appid: string; active: Acti
       )}
       {!relevant && (
         <PanelSection title={game.name}>
-          <Note>
-            No FSR 3.1 DLL (amd_fidelityfx_upscaler_dx12.dll / amd_fidelityfx_dx12.dll) and no OptiScaler.ini found in
-            this game. Install OptiScaler for it first to use HelixSR in DLSS/XeSS/FSR 2 games (DirectX 12 only).
-          </Note>
+          <PanelSectionRow>
+            <div style={{ ...small, color: "#dcdedf" }}>
+              {game.inputs.length > 0 && game.inputs_dx11 ? (
+                <>
+                  <div style={{ fontSize: 15, fontWeight: 700, color: YELLOW, marginBottom: 2 }}>
+                    Not supported: this game looks like DirectX 11
+                  </div>
+                  <div>
+                    {game.inputs_dx11} uses DirectX 11. HelixSR only works in DirectX 12 games, also through OptiScaler.
+                  </div>
+                </>
+              ) : game.inputs.length > 0 ? (
+                <>
+                  <div style={{ fontSize: 15, fontWeight: 700, color: "#dcdedf", marginBottom: 2 }}>
+                    {game.inputs.join(" / ")} only: install OptiScaler first
+                  </div>
+                  <div>
+                    This game has no FSR 3.1 and no OptiScaler yet, so there's nothing to install HelixSR into. Install
+                    OptiScaler into it (for example with the Decky Framegen plugin), then press Check again: an
+                    OptiScaler section appears here with one button to install HelixSR. In the game, select{" "}
+                    {game.inputs[0]}; OptiScaler hands it to HelixSR.
+                  </div>
+                </>
+              ) : (
+                <div>
+                  No FSR 3.1, OptiScaler, DLSS or XeSS found in this game, so HelixSR has nothing to work with here.
+                </div>
+              )}
+            </div>
+          </PanelSectionRow>
+          {game.inputs.length > 0 && !game.inputs_dx11 && (
+            <PanelSectionRow>
+              <ButtonItem layout="below" disabled={loading} onClick={reload}>
+                {loading ? "Checking…" : "Check again"}
+              </ButtonItem>
+            </PanelSectionRow>
+          )}
         </PanelSection>
       )}
       {game.official_dlss.length > 0 && (
@@ -2053,7 +2089,7 @@ function Content() {
   }, [refreshHelix, scan]);
 
   const shown = useMemo(
-    () => (games ?? []).filter((g) => !onlyCompatible || g.fsr || g.optiscaler || g.helixsr),
+    () => (games ?? []).filter((g) => !onlyCompatible || g.fsr || g.optiscaler || g.helixsr || g.inputs.length > 0),
     [games, onlyCompatible],
   );
 
@@ -2079,7 +2115,8 @@ function Content() {
       <PanelSection title="Game Configuration">
         <PanelSectionRow>
           <ToggleField
-            label="Only FSR 3.1 / OptiScaler games"
+            label="Only games HelixSR can use"
+            description="With FSR 3.1, OptiScaler, DLSS, XeSS or FSR 2"
             checked={onlyCompatible}
             onChange={(v) => {
               setOnlyCompatible(v);
@@ -2097,7 +2134,9 @@ function Content() {
               label="Game"
               rgOptions={shown.map((g) => ({
                 data: g.appid,
-                label: `${g.name}${g.source !== "steam" ? ` · ${sourceLabel(g)}` : ""}${g.helixsr ? "  ✓" : ""}`,
+                label: `${g.name}${g.source !== "steam" ? ` · ${sourceLabel(g)}` : ""}${
+                  !g.fsr && !g.optiscaler && !g.helixsr && g.inputs.length > 0 ? " · needs OptiScaler" : ""
+                }${g.helixsr ? "  ✓" : ""}`,
               }))}
               selectedOption={current?.appid}
               strDefaultLabel="Select a game"

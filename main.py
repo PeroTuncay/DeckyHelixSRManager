@@ -782,10 +782,17 @@ def inside_library(p):
     return any(rp.startswith(r + os.sep) for r in game_roots())
 
 
-def scan_folder(folder, anticheat=None, dlss_installs=None):
+# Upscalers a game ships that OptiScaler can take as input: such a game (without FSR 3.1) gets HelixSR once OptiScaler
+# is in it (e.g. from Decky Framegen), so the list shows it with that hint instead of hiding it.
+INPUT_DLLS = {"nvngx_dlss.dll": "DLSS", "libxess.dll": "XeSS", "ffx_fsr2_api_dx12_x64.dll": "FSR 2",
+              "ffx_fsr2_api_x64.dll": "FSR 2"}
+
+
+def scan_folder(folder, anticheat=None, dlss_installs=None, inputs=None):
     """FSR DLLs and OptiScaler.ini folders under a game folder. Our own HelixSR folders for OptiScaler are skipped.
     With a list for anticheat, the paths of anti-cheat files/folders found on the way are added to it; with a list for
-    dlss_installs, folders where HelixSR's own setup installed its experimental DLSS route (1.8.1+)."""
+    dlss_installs, folders where HelixSR's own setup installed its experimental DLSS route (1.8.1+); with a dict for
+    inputs, the upscalers the game ships (INPUT_DLLS: "DLSS" -> the first folder it's in)."""
     dlls, opti = [], []
 
     def walk(d, depth):
@@ -810,9 +817,16 @@ def scan_folder(folder, anticheat=None, dlss_installs=None):
                     walk(e.path, depth - 1)
             elif low in NAMES:
                 dlls.append(Path(e.path))
+            elif inputs is not None and low in INPUT_DLLS:
+                inputs.setdefault(INPUT_DLLS[low], d)
 
     walk(folder, SCAN_DEPTH)
     return dlls, opti
+
+
+def input_labels(inputs):
+    order = ["DLSS", "XeSS", "FSR 2"]
+    return [k for k in order if k in inputs]
 
 
 def game_processes(folder, appid, proc="/proc"):
@@ -2422,12 +2436,13 @@ class Plugin:
             out = []
             notes = []
             for g in all_games(notes).values():
-                dlss_dirs = []
-                dlls, opti = scan_folder(g["path"], None, dlss_dirs)
+                dlss_dirs, inputs = [], {}
+                dlls, opti = scan_folder(g["path"], None, dlss_dirs, inputs)
                 targets = direct_targets(dlls)
                 installed = any(is_helixsr(t) and original_of(t).exists() for t in targets) or \
                     any(installed_kind(o) is not None for o in opti) or bool(dlss_dirs)
-                out.append({**g, "fsr": bool(targets), "optiscaler": bool(opti), "helixsr": installed})
+                out.append({**g, "fsr": bool(targets), "optiscaler": bool(opti), "helixsr": installed,
+                            "inputs": input_labels(inputs)})
             out.sort(key=lambda x: x["name"].lower())
             self.unresolved_shortcuts = sorted(set(notes), key=str.lower)
             return out
@@ -2505,8 +2520,10 @@ class Plugin:
             def work():
                 g = self._game(appid)
                 folder = Path(g["path"])
-                anticheat, dlss_dirs = [], []
-                dlls, opti = scan_folder(folder, anticheat, dlss_dirs)
+                anticheat, dlss_dirs, inputs = [], [], {}
+                dlls, opti = scan_folder(folder, anticheat, dlss_dirs, inputs)
+                # a DLSS / XeSS game without FSR 3.1 or OptiScaler: DirectX 11 if the exe next to its DLL says so
+                inputs_dx11 = next((dx11_info(d)["dx11_exe"] for d in inputs.values() if dx11_info(d)["dx11"]), None)
                 direct = []
                 for t in direct_targets(dlls):
                     orig = original_of(t)
@@ -2538,6 +2555,7 @@ class Plugin:
                                   "helix_version": helix_version(d / DLL_NGX), "check": helix_log_check(d)}
                                  for d in dlss_dirs if d not in opti]   # with OptiScaler.ini there: shown in its section
                 return {"ok": True, **g, "direct": direct, "optiscaler": optis, "official_dlss": official_dlss,
+                        "inputs": input_labels(inputs), "inputs_dx11": inputs_dx11,
                         # the game's own .exe first (Steam's helpers like reaper/srt-bwrap carry its app id too)
                         "running": sorted((p["name"] for p in procs), key=lambda n: ".exe" not in n.lower()),
                         "steam_busy": steam_busy(g),

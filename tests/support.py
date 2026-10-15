@@ -63,6 +63,31 @@ def binary_kv(d):
     return out + b"\x08"
 
 
+def pe_exe(path, imports=()):
+    """A minimal 64-bit Windows executable whose import table names the given DLLs (e.g. "d3d11.dll"), for the
+    DirectX checks. One section at file offset 0x400 / RVA 0x1000 holds the import descriptors and the names."""
+    import struct as st
+    dos = bytearray(0x40)
+    dos[0:2] = b"MZ"
+    st.pack_into("<I", dos, 0x3C, 0x40)
+    opt = bytearray(240)
+    st.pack_into("<H", opt, 0, 0x20B)                      # PE32+
+    st.pack_into("<Q", opt, 24, 0x140000000)               # ImageBase
+    st.pack_into("<I", opt, 108, 16)                       # NumberOfRvaAndSizes
+    names_at = 0x100
+    st.pack_into("<II", opt, 112 + 8, 0x1000, 20 * (len(imports) + 1))   # directory 1: imports
+    coff = b"PE\0\0" + st.pack("<HHIIIHH", 0x8664, 1, 0, 0, 0, len(opt), 0x22)
+    sec = bytearray(40)
+    sec[0:6] = b".idata"
+    st.pack_into("<IIII", sec, 8, 0x400, 0x1000, 0x400, 0x400)
+    body = bytearray(0x400)
+    for i, name in enumerate(imports):
+        st.pack_into("<I", body, i * 20 + 12, 0x1000 + names_at + i * 32)
+        body[names_at + i * 32:names_at + i * 32 + len(name)] = name.encode()
+    head = bytes(dos) + coff + bytes(opt) + bytes(sec)
+    return write(path, head.ljust(0x400, b"\0") + bytes(body))
+
+
 def enable_stores(*ids):
     """Switches other stores on, as the "Other Stores" toggles do (all are off by default)."""
     s = main.load_settings()
