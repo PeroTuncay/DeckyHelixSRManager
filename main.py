@@ -370,8 +370,8 @@ def installed_games():
 UNIFIDECK_MAP = HOME / ".local/share/unifideck/games.map"   # Unifideck: "store:id=<exe>\t<work dir>\t<shortcut appid>",
 UNIFIDECK_REGISTRY = UNIFIDECK_MAP.with_name("shortcuts_registry.json")  # older: "store:id|<exe>|<work dir>" + this
 HEROIC_DIRS = [HOME / ".config/heroic", HOME / ".var/app/com.heroicgameslauncher.hgl/config/heroic"]   # native, Flatpak
-HEROIC_FILES = [("gog_store/installed.json", "GOG"), ("nile_config/installed.json", "Amazon"),
-                ("legendaryConfig/legendary/installed.json", "Epic")]
+HEROIC_FILES = [("gog_store/installed.json", "GOG"), ("nile_config/nile/installed.json", "Amazon"),
+                ("nile_config/installed.json", "Amazon"), ("legendaryConfig/legendary/installed.json", "Epic")]
 LEGENDARY_FILES = [HOME / ".config/legendary/installed.json",
                    HOME / ".var/app/com.heroicgameslauncher.hgl/config/legendary/installed.json"]
 LUTRIS = [  # (game configs, database), native and Flatpak
@@ -1094,12 +1094,21 @@ def run_curl(args, timeout=300):
     return p.stdout
 
 
+def release_zip(assets):
+    """HelixSR's own zip among a release's files: HelixSR-<version>.zip, not HelixSR-Scaler-*.zip or the desktop app
+    (1.9.0 ships all of them); else the first other zip."""
+    zips = [a for a in assets if a.get("name", "").lower().endswith(".zip")]
+    own = [a for a in zips if re.fullmatch(r"helixsr-\d[\w.\-]*\.zip", a["name"].lower())]
+    other = [a for a in zips if not re.search(r"scaler|desktop", a["name"].lower())]
+    return (own or other or [None])[0]
+
+
 def fetch_releases():
     """Every published HelixSR release with a zip, newest first, from GitHub's release API (cached for offline use)."""
     data = json.loads(run_curl(["-H", "Accept: application/vnd.github+json", RELEASES_API], timeout=30))
     out = []
     for r in data:
-        asset = next((a for a in r.get("assets", []) if a["name"].lower().endswith(".zip")), None)
+        asset = release_zip(r.get("assets", []))
         if r.get("draft") or not asset or not valid_tag(r.get("tag_name")):
             continue
         digest = asset.get("digest") or ""
@@ -1268,14 +1277,44 @@ def folder_helix_version(folder):
     return None
 
 
+SETTING_KEYS = ("Int8", "Sharpener", "Sharpness", "WaveSize", "UpscaleFilter", "UseGameSlider")
+SETTINGS_CACHE = {}   # (dll path, mtime, size) -> setting names the DLL reads from helixsr.ini
+
+
+def dll_setting_keys(dll):
+    """The helixsr.ini settings a HelixSR DLL reads (it looks them up by name, as UTF-16 text in the DLL). The
+    network appended after setup sits at the end, so the start of the file is enough."""
+    try:
+        st = Path(dll).stat()
+        key = (str(dll), st.st_mtime, st.st_size)
+        if key not in SETTINGS_CACHE:
+            with open(dll, "rb") as f:
+                data = f.read(16 << 20)
+            SETTINGS_CACHE[key] = {k for k in SETTING_KEYS if k.encode("utf-16-le") in data}
+        return SETTINGS_CACHE[key]
+    except OSError:
+        return set()
+
+
+def folder_helix_dll(folder):
+    for n in (*NAMES, DLL_NGX, "helixsr.dll"):
+        p = Path(folder) / n
+        if p.exists() and is_helixsr(p):
+            return p
+    return None
+
+
 def ini_defaults(folder):
-    """HelixSR's defaults for the install in folder. From 1.9 it sharpens lightly by default (NVIDIA's filter at 0.1);
-    up to 1.8 sharpening was off (Sharpness 0.5 when turned on)."""
+    """HelixSR's defaults for the install in folder. Up to 1.8 sharpening is off (Sharpness 0.5 when turned on). 1.9.0
+    came twice under the same version: the pre-release sharpened by default (NVIDIA at 0.1) and still read Int8; the
+    release doesn't sharpen by default (Sharpness 0.1 when turned on) and has no Int8 setting. The DLL tells them apart."""
     d = dict(INI_DEFAULTS)
-    m = re.match(r"(\d+)\.(\d+)", folder_helix_version(folder) or "")
+    dll = folder_helix_dll(folder)
+    m = re.match(r"(\d+)\.(\d+)", (helix_version(dll) if dll else None) or "")
     if m and (int(m.group(1)), int(m.group(2))) >= (1, 9):
-        d[("sharpening", "sharpener")] = "nvidia"
         d[("sharpening", "sharpness")] = "0.1"
+        if "Int8" in dll_setting_keys(dll):
+            d[("sharpening", "sharpener")] = "nvidia"
     return d
 
 
@@ -1345,7 +1384,9 @@ def helix_ini_values(folder):
     ini = Path(folder) / "helixsr.ini"
     d = ini_defaults(folder)
     sharpener, sharpness = d[("sharpening", "sharpener")], d[("sharpening", "sharpness")]
-    defaults = {"sharpener_default": sharpener, "sharpness_default": sharpness}
+    dll = folder_helix_dll(folder)
+    defaults = {"sharpener_default": sharpener, "sharpness_default": sharpness,
+                "int8_supported": bool(dll) and "Int8" in dll_setting_keys(dll)}
     if not ini.exists():
         return {"exists": False, "network_resolution": "auto", "sharpening": "off", "upscaler_dll": "",
                 "model_e_enabled": True, "network_resolutions": [], "sharpener": sharpener, "sharpness": sharpness,
@@ -1397,6 +1438,14 @@ def official_marker_data(opti_dir):
     data = read_json(Path(opti_dir) / OPTI_SUBDIR / NGX_MARKER)
     return data if isinstance(data, dict) and data.get("route") in ("optiscaler", "dlss") and "previous" not in data \
         else None
+
+
+def is_scaler(opti_dir):
+    """HelixSR Scaler (OptiScaler with HelixSR built in, installed by HelixSR Desktop 1.9+): its OptiScaler.ini has a
+    [HelixSR] section and its HelixSR folder carries none of this plugin's or HelixSR's setup markers."""
+    if installed_kind(opti_dir) is not None:
+        return False
+    return re.search(r"(?mi)^\s*\[HelixSR\]\s*$", read_text(Path(opti_dir) / "OptiScaler.ini")) is not None
 
 
 def installed_kind(opti_dir):
@@ -1474,6 +1523,9 @@ def opti_state(opti_dir, game_folder):
     if kind == "official":
         configured = True
         helix_files = sub / "helixsr.dll" if (sub / "helixsr.dll").exists() else opti_dir / DLL_NGX
+    if kind is None and is_scaler(opti_dir):
+        kind, configured = "scaler", True   # shown and checked, left to HelixSR Desktop
+        helix_files = folder_helix_dll(sub) or sub / NAMES[1]
     if kind == "ngx":
         nv_path = linux_path(nvngx, opti_dir)
         configured = nv_path is not None and os.path.realpath(nv_path) == os.path.realpath(sub / DLL_NGX) and \
@@ -1654,6 +1706,9 @@ def install_optiscaler(opti_dir, dll, ini_src, keep_fsr4):
 
 
 def refuse_official(opti_dir):
+    if is_scaler(opti_dir):
+        raise RuntimeError("HelixSR was installed here with HelixSR Scaler (HelixSR Desktop). Update or remove it "
+                           "with HelixSR Desktop; the plugin leaves it as it is.")
     data = official_marker_data(opti_dir)
     if data is not None:
         how = "as the game's DLSS (its experimental route)" if data.get("route") == "dlss" else \
@@ -1921,7 +1976,10 @@ def setup_command(script, d, built):
     if "--rebuild" not in text:
         return ["bash", str(script), str(d), "--yes"]
     if "HelixSR Freeware License" in text:
-        return ["bash", str(script), "--yes"] + rebuild
+        # 1.9.0 also builds frame generation from NVIDIA's files (about 400 MB of downloads) for HelixSR Scaler, which
+        # the plugin doesn't install: skipped where the setup offers --no-fg
+        no_fg = ["--no-fg"] if "--no-fg" in text else []
+        return ["bash", str(script), "--yes"] + rebuild + no_fg
     return ["bash", str(build_only_script(script)), "--yes"] + rebuild
 
 

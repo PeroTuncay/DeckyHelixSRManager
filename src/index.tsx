@@ -98,6 +98,7 @@ type IniValues = {
   sharpener: string; // 1.8+: off / nvidia / rcas
   sharpness: string; // 1.8+: 0.0 - 1.0
   int8: string; // 1.9+: auto / on / off
+  int8_supported: boolean; // the DLL reads the Int8 setting (only 1.9.0's pre-release did)
   sharpener_default: string; // HelixSR's own default for this install: off up to 1.8, nvidia (at 0.1) from 1.9
   sharpness_default: string;
 };
@@ -119,7 +120,7 @@ type OptiTarget = {
   dir: string;
   rel: string;
   configured: boolean;
-  installed_kind: ReleaseKind | "official" | null; // "official": set up by HelixSR 1.7+'s own setup
+  installed_kind: ReleaseKind | "official" | "scaler" | null; // "official": by HelixSR 1.7+'s own setup; "scaler": HelixSR Scaler (HelixSR Desktop)
   nvngx_path: string;
   helix_folder_present: boolean;
   helix_version: string | null;
@@ -1281,7 +1282,7 @@ function DirectSection({
                   ini={t.ini}
                   style={settingsStyle("ffx", t.helix_version)}
                   details={details}
-                  int8={versionAtLeast(t.helix_version, 1, 9)}
+                  int8={versionAtLeast(t.helix_version, 1, 9) && t.ini.int8_supported}
                   onChange={reload}
                 />
               </>
@@ -1432,7 +1433,8 @@ function OptiItem({
 
   const ngxActive = active.kind === "ngx";
   const installed = o.installed_kind;
-  const official = installed === "official";
+  const scaler = installed === "scaler"; // HelixSR Scaler from HelixSR Desktop: shown and checked, not managed
+  const official = installed === "official" || scaler;
   const differs = installed !== null && !!active.version && o.helix_version !== active.version;
   const sizeMb = o.current_sr_dll ? (o.current_sr_dll.size / 1048576).toFixed(1) : null;
 
@@ -1441,7 +1443,9 @@ function OptiItem({
       <Note>
         <div style={{ fontWeight: 600 }}>{o.rel === "." ? "Game folder" : o.rel}</div>
         <div>
-          {official
+          {scaler
+            ? `HelixSR ${o.helix_version ?? ""} installed with HelixSR Scaler (HelixSR Desktop): HelixSR is built into this OptiScaler`
+            : official
             ? o.official_route === "dlss"
               ? `HelixSR ${o.helix_version ?? ""} installed by HelixSR's own setup as the game's DLSS (experimental route, without OptiScaler)`
               : `HelixSR ${o.helix_version ?? ""} installed by HelixSR's own setup, together with its own OptiScaler`
@@ -1488,6 +1492,11 @@ function OptiItem({
             Enable HelixSR again
           </ButtonItem>
         </PanelSectionRow>
+      ) : scaler ? (
+        <Note>
+          The plugin leaves this install to HelixSR Desktop: update or remove it there. HelixSR's settings are in its
+          in-game menu (Insert) or OptiScaler.ini, section [HelixSR]. The check below still works.
+        </Note>
       ) : official ? (
         <Note>
           The plugin leaves this install to HelixSR's setup. To update or remove it, run helixsr-setup.sh from HelixSR's
@@ -1585,14 +1594,16 @@ function OptiItem({
               </div>
             </PanelSectionRow>
           )}
-          <IniControls
-            folder={o.helix_folder}
-            ini={o.ini}
-            style={settingsStyle(installed, o.helix_version)}
-            details={details}
-            int8={versionAtLeast(o.helix_version, 1, 9)}
-            onChange={reload}
-          />
+          {!scaler && (
+            <IniControls
+              folder={o.helix_folder}
+              ini={o.ini}
+              style={settingsStyle(installed, o.helix_version)}
+              details={details}
+              int8={versionAtLeast(o.helix_version, 1, 9) && o.ini.int8_supported}
+              onChange={reload}
+            />
+          )}
         </>
       )}
     </>
@@ -1605,7 +1616,9 @@ type Install = { how: "direct" | "opti" | "dlss"; version: string | null; check:
 function optiSummary(items: OptiTarget[]) {
   const states = items
     .map((o) =>
-      o.installed_kind === "official"
+      o.installed_kind === "scaler"
+        ? `HelixSR ${o.helix_version ?? ""} (HelixSR Scaler)`
+        : o.installed_kind === "official"
         ? `HelixSR ${o.helix_version ?? ""} (installed by HelixSR's setup)`
         : o.disabled
           ? "HelixSR disabled"
@@ -1833,7 +1846,7 @@ function GameSection({ appid, active, onRemoved }: { appid: string; active: Acti
                   in Desktop Mode and answer r for this game. Don't use it in online games (ban risk).
                 </div>
               </Note>
-              <CheckBlock check={d.check} ini={{ exists: false, network_resolution: "auto", sharpening: "off", upscaler_dll: "", model_e_enabled: true, network_resolutions: [], sharpener: "off", sharpness: "0.5", int8: "auto", sharpener_default: "off", sharpness_default: "0.5" }} session={game.session} details={details} />
+              <CheckBlock check={d.check} ini={{ exists: false, network_resolution: "auto", sharpening: "off", upscaler_dll: "", model_e_enabled: true, network_resolutions: [], sharpener: "off", sharpness: "0.5", int8: "auto", int8_supported: false, sharpener_default: "off", sharpness_default: "0.5" }} session={game.session} details={details} />
             </div>
           ))}
         </Accordion>

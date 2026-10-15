@@ -33,7 +33,7 @@ OptiScaler.
 - **Did it apply?** Reads HelixSR's log (network running, render and output size, whether the log is from the last
   game session), shows OptiScaler settings that commonly get in the way (DLSS input off, Steam Input blocked, menu key),
   and has a network on/off switch to prove HelixSR is doing the upscaling.
-- **Settings per game** where the release supports them (sharpening from 1.8, the int8 network from 1.9, network resolution up to 1.4).
+- **Settings per game** where the release supports them (sharpening from 1.8, network resolution up to 1.4).
 - **Less scrolling:** HelixSR Installation, Other Stores, OptiScaler and "In place of the game's FSR 3.1" fold away (tap the
   header); a closed section shows a one-line summary, including warnings inside. Installation starts open.
 - **Plugin updates from the panel:** a newer release shows up at the top with an **Update** button; Decky installs it
@@ -42,7 +42,7 @@ OptiScaler.
   needed buttons (download again, delete, clean up, diagnostics, debug report) behind **More options**.
 - **Clean up (optional):** remove every downloaded release and the setup's downloads in one go. Not needed for updates.
 
-> **HelixSR has changed its approach a few times.** Up to 1.4 and again **from 1.7** (tested up to 1.8.1; 1.9.0, a pre-release, is supported), it replaces
+> **HelixSR has changed its approach a few times.** Up to 1.4 and again **from 1.7** (tested up to 1.9.0), it replaces
 > FSR 3.1 (`amd_fidelityfx_dx12.dll`): through OptiScaler for DLSS games (select DLSS in the game), or in place of a
 > game's own FSR 3.1. 1.5 and 1.6 instead replaced DLSS (`nvngx.dll`) through OptiScaler and needed a Steam launch
 > option; those releases were withdrawn upstream, but the plugin still supports a 1.5 you already downloaded.
@@ -51,7 +51,9 @@ OptiScaler.
 > the plugin runs only the build part of that setup, so HelixSR's own game installer never starts. From 1.9 (HelixSR's
 > setup may no longer be modified) the setup runs as published: after the build its game installer starts, gets no
 > answer and ends without changing any game. Either way the plugin then installs per game itself, into the OptiScaler
-> the game already has. Games already set up by HelixSR's own setup are shown, but left to
+> the game already has. 1.9.0's setup can also build frame generation for HelixSR Scaler (about 400 MB of NVIDIA
+> downloads); the plugin skips that (`--no-fg`), since it doesn't install HelixSR Scaler. Games set up with HelixSR
+> Desktop's HelixSR Scaler (OptiScaler with HelixSR built in) are shown with the check, but left to HelixSR Desktop. Games already set up by HelixSR's own setup are shown, but left to
 > that setup, including 1.8.1's experimental "DLSS without OptiScaler" route (HelixSR's loader as `dxgi.dll` and
 > HelixSR as `nvngx.dll` next to the game's exe), which the plugin doesn't offer itself. A setup whose layout the plugin
 > doesn't recognize isn't run.
@@ -141,9 +143,9 @@ live side-by-side comparison, switch between "FSR HelixSR (3.1.5)" and FSR 3.1.5
 
 ### 5. Settings, disable and undo
 
-- **Sharpening:** **Sharpening** (NVIDIA's Image Sharpening or AMD's RCAS) and **Sharpness**. In 1.8 off by default,
-  as DLSS; from 1.9 HelixSR sharpens lightly by default (NVIDIA's filter at 0.1), and **Off** turns that off.
-- **Int8 network** (1.9+, experimental): Auto (on for RDNA 2 and newer), On or Off. Up to 1.4: the release's sharpening mode and network resolution.
+- **Sharpening:** **Sharpening** (NVIDIA's Image Sharpening or AMD's RCAS) and **Sharpness**. Off by default, as DLSS
+  (1.9.0's pre-release sharpened lightly by default; the plugin reads which one a game has).
+- **Int8 network:** only 1.9.0's pre-release had a switch (Auto, On, Off); the release picks it automatically. Up to 1.4: the release's sharpening mode and network resolution.
   Changes take effect after restarting the game.
 - **Disable** switches the game back to its own FSR (or OptiScaler's previous upscaler) and keeps HelixSR's files;
   **Enable HelixSR again** switches back without downloading or building anything.
