@@ -42,7 +42,7 @@ OptiScaler.
   needed buttons (download again, delete, clean up, diagnostics, debug report) behind **More options**.
 - **Clean up (optional):** remove every downloaded release and the setup's downloads in one go. Not needed for updates.
 
-> **HelixSR has changed its approach a few times.** Up to 1.4 and again **from 1.7** (tested up to 1.9.0), it replaces
+> **HelixSR has changed its approach a few times.** Up to 1.4 and again **from 1.7** (tested up to 1.9.3), it replaces
 > FSR 3.1 (`amd_fidelityfx_dx12.dll`): through OptiScaler for DLSS games (select DLSS in the game), or in place of a
 > game's own FSR 3.1. 1.5 and 1.6 instead replaced DLSS (`nvngx.dll`) through OptiScaler and needed a Steam launch
 > option; those releases were withdrawn upstream, but the plugin still supports a 1.5 you already downloaded.
@@ -148,7 +148,8 @@ live side-by-side comparison, switch between "FSR HelixSR (3.1.5)" and FSR 3.1.5
 
 - **Sharpening:** **Sharpening** (NVIDIA's Image Sharpening or AMD's RCAS) and **Sharpness**. Off by default, as DLSS
   (1.9.0's pre-release sharpened lightly by default; the plugin reads which one a game has).
-- **Int8 network:** only 1.9.0's pre-release had a switch (Auto, On, Off); the release picks it automatically. Up to 1.4: the release's sharpening mode and network resolution.
+- **Int8 network (Speed Boost):** Auto, On or Off where the release reads it (1.9.0's pre-release, 1.9.3 and newer);
+  the 1.9.0 release picks it automatically. Up to 1.4: the release's sharpening mode and network resolution.
   Changes take effect after restarting the game.
 - **Disable** switches the game back to its own FSR (or OptiScaler's previous upscaler) and keeps HelixSR's files;
   **Enable HelixSR again** switches back without downloading or building anything.

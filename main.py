@@ -1321,13 +1321,14 @@ def folder_helix_dll(folder):
 def ini_defaults(folder):
     """HelixSR's defaults for the install in folder. Up to 1.8 sharpening is off (Sharpness 0.5 when turned on). 1.9.0
     came twice under the same version: the pre-release sharpened by default (NVIDIA at 0.1) and still read Int8; the
-    release doesn't sharpen by default (Sharpness 0.1 when turned on) and has no Int8 setting. The DLL tells them apart."""
+    release doesn't sharpen by default (Sharpness 0.1 when turned on) and has no Int8 setting. The DLL tells them apart.
+    1.9.3 reads Int8 again (Scaler calls it Speed Boost) and doesn't sharpen by default either."""
     d = dict(INI_DEFAULTS)
     dll = folder_helix_dll(folder)
-    m = re.match(r"(\d+)\.(\d+)", (helix_version(dll) if dll else None) or "")
-    if m and (int(m.group(1)), int(m.group(2))) >= (1, 9):
+    v = tuple(int(n) for n in re.findall(r"\d+", (helix_version(dll) if dll else None) or "")[:3])
+    if v >= (1, 9):
         d[("sharpening", "sharpness")] = "0.1"
-        if "Int8" in dll_setting_keys(dll):
+        if v == (1, 9, 0) and "Int8" in dll_setting_keys(dll):   # only 1.9.0's pre-release
             d[("sharpening", "sharpener")] = "nvidia"
     return d
 
@@ -1459,6 +1460,8 @@ def is_scaler(opti_dir):
     [HelixSR] section and its HelixSR folder carries none of this plugin's or HelixSR's setup markers."""
     if installed_kind(opti_dir) is not None:
         return False
+    if (Path(opti_dir) / "HelixSR-Scaler.files").is_file():   # the file list HelixSR 1.9.3's setup leaves
+        return True
     return re.search(r"(?mi)^\s*\[HelixSR\]\s*$", read_text(Path(opti_dir) / "OptiScaler.ini")) is not None
 
 

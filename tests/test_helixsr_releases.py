@@ -55,6 +55,12 @@ class DllSettingsTest(FakeHomeTest):
         v = main.helix_ini_values(d)
         self.assertEqual((v["sharpener_default"], v["sharpness_default"], v["int8_supported"]), ("off", "0.1", False))
 
+    def test_193_reads_int8_again_but_doesnt_sharpen_by_default(self):
+        d = HOME / "Games/D/HelixSR"
+        fake_dll(d / "amd_fidelityfx_dx12.dll", "1.9.3", ["Int8", "Sharpener", "Sharpness", "WaveSize"])
+        v = main.helix_ini_values(d)
+        self.assertEqual((v["sharpener_default"], v["sharpness_default"], v["int8_supported"]), ("off", "0.1", True))
+
     def test_181_defaults(self):
         d = HOME / "Games/C/HelixSR"
         fake_dll(d / "amd_fidelityfx_dx12.dll", "1.8.1", ["Sharpener", "Sharpness"])
@@ -109,6 +115,12 @@ class ScalerInstallTest(FakeHomeTest):
         with self.assertRaises(RuntimeError) as e:
             main.refuse_official(self.g)
         self.assertIn("HelixSR Scaler", str(e.exception))
+
+    def test_recognized_by_its_file_list_too(self):
+        g = game(HOME / "Games/Listed", "game.exe")
+        write(g / "OptiScaler.ini", "[Upscalers]\nDx12Upscaler=auto\n")
+        write(g / "HelixSR-Scaler.files", "dxgi.dll\nOptiScaler.ini\n")
+        self.assertTrue(main.is_scaler(g))
 
     def test_plain_optiscaler_is_not_scaler(self):
         g = game(HOME / "Games/Plain", "game.exe")

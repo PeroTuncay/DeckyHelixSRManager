@@ -98,7 +98,7 @@ type IniValues = {
   sharpener: string; // 1.8+: off / nvidia / rcas
   sharpness: string; // 1.8+: 0.0 - 1.0
   int8: string; // 1.9+: auto / on / off
-  int8_supported: boolean; // the DLL reads the Int8 setting (only 1.9.0's pre-release did)
+  int8_supported: boolean; // the DLL reads the Int8 setting (1.9.0's pre-release, 1.9.3+)
   sharpener_default: string; // HelixSR's own default for this install: off up to 1.8, nvidia (at 0.1) from 1.9
   sharpness_default: string;
 };
@@ -1098,8 +1098,8 @@ function IniControls({
       {int8 && (
         <PanelSectionRow>
           <DropdownItem
-            label="Int8 network (experimental)"
-            description="New in 1.9: about 15% faster on RDNA 2 and newer, with output that differs only invisibly. Turn it off if something looks wrong. Restart the game after changing it."
+            label="Int8 network (Speed Boost)"
+            description="About 15% faster on RDNA 2 and newer, with output that differs only invisibly. Auto picks it by GPU. Turn it off if something looks wrong. Restart the game after changing it."
             rgOptions={INT8}
             selectedOption={INT8.some((o) => o.data === ini.int8) ? ini.int8 : "auto"}
             onChange={(o) => save("int8", o.data)}
