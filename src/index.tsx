@@ -816,10 +816,11 @@ function HelixSection({ state, refresh }: { state: HelixState | null; refresh: (
         strTitle={`Build HelixSR ${tag}`}
         strDescription={
           "Takes about 7-10 minutes on a Steam Deck. Keep it plugged in and awake (sleep pauses the build); you can " +
-          "close this menu meanwhile, a notification tells you when it's done. HelixSR's setup downloads NVIDIA's " +
-          "DLSS DLL from NVIDIA's GitHub (NVIDIA's license applies), a portable Python and Microsoft's shader " +
-          "compiler, builds the network into the HelixSR DLL and deletes NVIDIA's DLL again. The result is for this " +
-          "device only, don't share it."
+          "close this menu meanwhile, a notification tells you when it's done. NVIDIA's DLSS DLL is downloaded from " +
+          "NVIDIA's GitHub (NVIDIA's license applies; checked against the checksum HelixSR names), plus a portable " +
+          "Python and Microsoft's shader compiler; HelixSR's setup builds the network into the HelixSR DLL and NVIDIA's " +
+          "DLL is deleted again. HelixSR's own game installer is never answered, so it changes no game. The result is " +
+          "for this device only, don't share it."
         }
         strOKButtonText="Download and build"
         onOK={async () => {

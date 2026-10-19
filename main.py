@@ -115,13 +115,38 @@ def version_dir(tag):
     return base_dir() if tag == LEGACY_TAG else base_dir() / tag
 
 
+RELEASE_DLL_DIR = "HelixSR-fsrfg"   # 2.0+: the DLL (and its helixsr.ini) sit in this folder of the release
+
+
 def release_dll(d):
-    """The HelixSR DLL in a release folder: nvngx.dll (1.5+) or amd_fidelityfx_dx12.dll (up to 1.4), or None."""
-    for name in (DLL_NGX, DLL_FFX):
-        p = Path(d) / name
+    """The HelixSR DLL in a release folder: nvngx.dll (1.5-1.6), amd_fidelityfx_dx12.dll (up to 1.4, 1.7-1.9) or
+    HelixSR-fsrfg/amd_fidelityfx_dx12.dll (2.0+), or None."""
+    for p in (Path(d) / DLL_NGX, Path(d) / DLL_FFX, Path(d) / RELEASE_DLL_DIR / DLL_FFX):
         if p.exists() and is_helixsr(p):
             return p
     return None
+
+
+def release_ini(d):
+    """The helixsr.ini a release ships: next to its DLL (HelixSR-fsrfg from 2.0), else in its top folder."""
+    dll = release_dll(d)
+    if dll and (dll.parent / "helixsr.ini").exists():
+        return dll.parent / "helixsr.ini"
+    return Path(d) / "helixsr.ini"
+
+
+def dlss_download(release):
+    """Where HelixSR's setup gets NVIDIA's DLSS DLL from, and its SHA256, read from the release's helixsr_setup.py
+    (the same file from NVIDIA's GitHub, checked the same way). None if the release doesn't name it."""
+    try:
+        text = (Path(release) / "setup" / "helixsr_setup.py").read_text(errors="replace")
+    except OSError:
+        return None
+    url = re.search(r"^DLSS_URL\s*=\s*'(https://[^']+)'", text, re.M)
+    sha = re.search(r"^DLSS_SHA256\s*=\s*'([0-9a-f]{64})'", text, re.M)
+    if not (url and sha) or not url.group(1).startswith("https://raw.githubusercontent.com/NVIDIA/"):
+        return None
+    return url.group(1), sha.group(1)
 
 
 def dll_kind(dll):
@@ -1326,7 +1351,9 @@ def ini_defaults(folder):
     d = dict(INI_DEFAULTS)
     dll = folder_helix_dll(folder)
     v = tuple(int(n) for n in re.findall(r"\d+", (helix_version(dll) if dll else None) or "")[:3])
-    if v >= (1, 9):
+    if v >= (2, 0):
+        d[("sharpening", "sharpness")] = "0.5"   # 2.0's helixsr.ini: Sharpener = off, Sharpness = 0.5
+    elif v >= (1, 9):
         d[("sharpening", "sharpness")] = "0.1"
         if v == (1, 9, 0) and "Int8" in dll_setting_keys(dll):   # only 1.9.0's pre-release
             d[("sharpening", "sharpener")] = "nvidia"
@@ -1981,7 +2008,7 @@ def build_only_script(script):
     return out
 
 
-def setup_command(script, d, built):
+def setup_command(script, d, built, dlss=None):
     """Arguments for a release's setup. Up to 1.6 the script takes the HelixSR folder. From 1.7 extra arguments mean
     *game* folders, and a built network is only rebuilt with --rebuild.
     From 1.9 the setup scripts are under the HelixSR Freeware License (read and run, no modified copies), so the script
@@ -1993,10 +2020,13 @@ def setup_command(script, d, built):
     if "--rebuild" not in text:
         return ["bash", str(script), str(d), "--yes"]
     if "HelixSR Freeware License" in text:
-        # 1.9.0 also builds frame generation from NVIDIA's files (about 400 MB of downloads) for HelixSR Scaler, which
-        # the plugin doesn't install: skipped where the setup offers --no-fg
+        # Never --yes: from 2.0 the setup hands it on to its game installer, which then installs HelixSR (Scaler or
+        # the FSR drop-in) into every game it finds. Its only question in the build is the download of NVIDIA's DLSS
+        # DLL: the plugin downloads that file itself (dlss) and passes it with --dlss, so nothing is asked, and the game
+        # installer gets no answer (stdin is /dev/null) and changes nothing. Frame generation (about 400 MB of NVIDIA
+        # downloads) is for HelixSR Scaler, which the plugin doesn't install: skipped where the setup offers --no-fg.
         no_fg = ["--no-fg"] if "--no-fg" in text else []
-        return ["bash", str(script), "--yes"] + rebuild + no_fg
+        return ["bash", str(script)] + rebuild + no_fg + (["--dlss", str(dlss)] if dlss else [])
     return ["bash", str(build_only_script(script)), "--yes"] + rebuild
 
 
@@ -2026,7 +2056,9 @@ def setup_status():
         pct = 50 + int(49 * min(1.0, shaders[0] / shaders[1]))
         label = f"Step 5/5: compiling shaders ({shaders[0]}/{shaders[1]})"
     tag = st.get("tag")
-    built = bool(tag) and valid_tag(tag) and has_network(version_dir(tag) / "amd_fidelityfx_dx12.dll")
+    # the DLL the setup builds into: the release's top folder up to 1.9, HelixSR-fsrfg from 2.0
+    built = bool(tag) and valid_tag(tag) and any(
+        p.exists() and has_network(p) for p in (version_dir(tag) / DLL_FFX, version_dir(tag) / RELEASE_DLL_DIR / DLL_FFX))
     if tree:
         state = "running"
     elif rc is not None:
@@ -2361,18 +2393,33 @@ class Plugin:
         env = clean_env()
         env["TMPDIR"] = str(SETUP_TMP)
         dll = release_dll(d)
+        freeware = "HelixSR Freeware License" in script.read_text(errors="replace")
+        nvidia = dlss_download(d) if freeware else None
+        if freeware and not nvidia:
+            return {"ok": False, "error": "This release's setup doesn't say where NVIDIA's DLSS DLL comes from, so the "
+                                          "plugin can't build it. Update the plugin, or run its setup in Desktop Mode."}
+        dlss_file = SETUP_TMP / "nvngx_dlss.dll"
         try:
-            cmd = setup_command(script, d, bool(dll and has_network(dll)))
+            cmd = setup_command(script, d, bool(dll and has_network(dll)), dlss_file if nvidia else None)
         except RuntimeError as e:
             return {"ok": False, "error": str(e)}
         with open(SETUP_LOG, "wb") as log:
             log.write(f"[decky] {time.ctime()}: running {' '.join(cmd[1:])}\n".encode())
             log.flush()
             # A wrapper shell records the exit code in a file, so the result is known even if Decky restarts the
-            # plugin meanwhile. --yes: the user agreed to NVIDIA's DLSS download in the confirmation dialog.
+            # plugin meanwhile. The user agreed to NVIDIA's DLSS download in the confirmation dialog: up to 1.8.1 by
+            # --yes; from 1.9 the wrapper downloads the DLL first (checked against the SHA256 HelixSR's setup names)
+            # and deletes it afterwards.
+            if nvidia:
+                wrapper = ('echo "[helixsr-setup] downloading nvngx_dlss.dll from NVIDIA ($2)"; '
+                           'curl -fsSL --retry 3 -o "$1" "$2" && [ "$(sha256sum "$1" | cut -d " " -f 1)" = "$3" ] '
+                           '|| { echo "[decky] the DLSS DLL from NVIDIA could not be downloaded or verified"; false; } '
+                           '&& { shift 3; "$@"; }; rc=$?; rm -f "' + str(dlss_file) + '"; echo $rc > "$0"')
+                argv = ["bash", "-c", wrapper, str(SETUP_RC), str(dlss_file), nvidia[0], nvidia[1], *cmd]
+            else:
+                argv = ["bash", "-c", '"$@"; echo $? > "$0"', str(SETUP_RC), *cmd]
             proc = subprocess.Popen(
-                ["bash", "-c", '"$@"; echo $? > "$0"', str(SETUP_RC), *cmd],
-                cwd=str(d), env=env, stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
+                argv, cwd=str(d), env=env, stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
                 start_new_session=True)
         SETUP_STATUS.write_text(json.dumps({"tag": tag, "pid": proc.pid, "started": time.time()}))
         asyncio.get_event_loop().create_task(self._wait_setup(proc))
@@ -2630,13 +2677,13 @@ class Plugin:
             self._guard(path, True)
             if not ignore_dx11:
                 refuse_dx11(self._checked_target(path).parent)
-            return install_direct(self._checked_target(path), dll, active_dir() / "helixsr.ini")
+            return install_direct(self._checked_target(path), dll, release_ini(active_dir()))
         return await self._do(work)
 
     async def uninstall_direct(self, path):
         def work():
             self._guard(path, False)
-            return uninstall_direct(self._checked_target(path), active_dir() / "helixsr.ini")
+            return uninstall_direct(self._checked_target(path), release_ini(active_dir()))
         return await self._do(work)
 
     async def install_optiscaler(self, path, keep_fsr4, ignore_dx11=False):
@@ -2644,7 +2691,7 @@ class Plugin:
             self._guard(path, True)
             if not ignore_dx11:   # "Install anyway": the user knows the game runs on DirectX 12
                 refuse_dx11(self._checked_opti(path))
-            return install_optiscaler(self._checked_opti(path), built_dll(), active_dir() / "helixsr.ini",
+            return install_optiscaler(self._checked_opti(path), built_dll(), release_ini(active_dir()),
                                       bool(keep_fsr4))
         return await self._do(work)
 
@@ -2691,7 +2738,7 @@ class Plugin:
                 raise RuntimeError("No HelixSR install in that folder.")
             ini = f / "helixsr.ini"
             if not ini.exists():
-                src = active_dir() / "helixsr.ini"
+                src = release_ini(active_dir())
                 if src.exists():
                     shutil.copyfile(src, ini)
                 else:

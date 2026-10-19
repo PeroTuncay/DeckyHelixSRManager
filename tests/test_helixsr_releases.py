@@ -1,6 +1,8 @@
 """How the plugin deals with HelixSR's releases: which zip it downloads, how it runs the setup, which settings and
 defaults an installed DLL has, and installs made by other HelixSR tools. Run: npm test."""
+import asyncio
 import json
+import struct
 import unittest
 from pathlib import Path
 
@@ -35,11 +37,11 @@ class SetupCommandTest(FakeHomeTest):
     def test_freeware_setup_runs_unmodified_without_frame_generation(self):
         s = self.script("# HelixSR Freeware License\n--rebuild\n--no-fg) ;;\n# --- games ---\n")
         cmd = main.setup_command(s, s.parent, True)
-        self.assertEqual([Path(cmd[1]).name, *cmd[2:]], ["helixsr-setup.sh", "--yes", "--rebuild", "--no-fg"])
+        self.assertEqual([Path(cmd[1]).name, *cmd[2:]], ["helixsr-setup.sh", "--rebuild", "--no-fg"])
 
     def test_freeware_setup_without_the_switch(self):
         s = self.script("# HelixSR Freeware License\n--rebuild\n# --- games ---\n")
-        self.assertEqual(main.setup_command(s, s.parent, False)[2:], ["--yes"])
+        self.assertEqual(main.setup_command(s, s.parent, False)[2:], [])
 
 
 class DllSettingsTest(FakeHomeTest):
@@ -130,3 +132,118 @@ class ScalerInstallTest(FakeHomeTest):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class Release200Test(FakeHomeTest):
+    """HelixSR 2.0: the DLL and its helixsr.ini in HelixSR-fsrfg, Sharpness 0.5 by default, and a setup whose --yes
+    would also answer its game installer (install into every game), so the plugin must never pass it."""
+
+    def release(self):
+        d = HOME / "HelixSR/v2.0.0"
+        fake_dll(d / "HelixSR-fsrfg/amd_fidelityfx_dx12.dll", "2.0.0", ["Int8", "Sharpener", "Sharpness"])
+        write(d / "HelixSR-fsrfg/helixsr.ini", "[Sharpening]\nSharpener = off\nSharpness = 0.5\n")
+        write(d / "setup/helixsr_setup.py",
+              "DLSS_URL = 'https://raw.githubusercontent.com/NVIDIA/DLSS/v310.7.0/lib/Windows_x86_64/rel/nvngx_dlss.dll'\n"
+              "DLSS_SHA256 = '" + "ab" * 32 + "'\n")
+        return d
+
+    def test_dll_and_ini_found_in_helixsr_fsrfg(self):
+        d = self.release()
+        self.assertEqual(main.release_dll(d), d / "HelixSR-fsrfg/amd_fidelityfx_dx12.dll")
+        self.assertEqual(main.release_ini(d), d / "HelixSR-fsrfg/helixsr.ini")
+
+    def test_200_defaults(self):
+        d = HOME / "Games/E/HelixSR"
+        fake_dll(d / "amd_fidelityfx_dx12.dll", "2.0.0", ["Int8", "Sharpener", "Sharpness"])
+        v = main.helix_ini_values(d)
+        self.assertEqual((v["sharpener_default"], v["sharpness_default"], v["int8_supported"]), ("off", "0.5", True))
+
+    def test_nvidia_download_read_from_the_release(self):
+        self.assertEqual(main.dlss_download(self.release()),
+                         ("https://raw.githubusercontent.com/NVIDIA/DLSS/v310.7.0/lib/Windows_x86_64/rel/nvngx_dlss.dll",
+                          "ab" * 32))
+
+    def test_a_download_from_elsewhere_is_refused(self):
+        d = self.release()
+        write(d / "setup/helixsr_setup.py", "DLSS_URL = 'https://example.com/nvngx_dlss.dll'\nDLSS_SHA256 = '" + "ab" * 32 + "'\n")
+        self.assertIsNone(main.dlss_download(d))
+
+    def test_freeware_setup_never_gets_yes(self):
+        s = write(HOME / "HelixSR/v/helixsr-setup.sh",
+                  "# HelixSR Freeware License\n--rebuild\n--no-fg) ;;\n--yes|-y) ASSUME_YES=1; INST+=(--yes) ;;\n")
+        cmd = main.setup_command(s, s.parent, False, Path("/tmp/nvngx_dlss.dll"))
+        self.assertNotIn("--yes", cmd)
+        self.assertEqual(cmd[2:], ["--no-fg", "--dlss", "/tmp/nvngx_dlss.dll"])
+
+    def test_built_network_in_helixsr_fsrfg_counts(self):
+        d = self.release()
+        dll = d / "HelixSR-fsrfg/amd_fidelityfx_dx12.dll"
+        dll.write_bytes(dll.read_bytes() + b"W" * 8 + b"P" * 8 + main.EMBED_MAGIC + struct.pack("<QQQ", 8, 8, 1))
+        self.assertTrue(main.has_network(main.release_dll(d)))
+
+
+class SetupWrapperTest(FakeHomeTest):
+    """The plugin's real start_setup for a 1.9+ setup: NVIDIA's DLL is downloaded and verified first, the setup gets
+    --dlss and --no-fg but never --yes, no input, and the DLL is deleted afterwards. The download is pointed at a local
+    file; the stand-in setup records how it was started."""
+
+    def test_wrapper_downloads_verifies_runs_and_cleans_up(self):
+        import hashlib
+        import os
+        import time
+        d = HOME / "HelixSR/v2.0.0"
+        main.save_settings({"helix_dir": str(HOME / "HelixSR"), "active": "v2.0.0"})
+        nvidia = write(HOME / "nvidia/nvngx_dlss.dll", b"NVIDIA DLL")
+        record = HOME / "record.txt"
+        write(d / "helixsr-setup.sh",
+              "# HelixSR Freeware License\n# --rebuild --no-fg\n"
+              f'{{ echo "args: $*"; dl="${{@: -1}}"; [ -f "$dl" ] && echo "dll there"; '
+              f'read -r x && echo "got input" || echo "no input"; }} > "{record}"\n')
+        write(d / "setup/helixsr_setup.py", "")
+        url, sha = nvidia.as_uri(), hashlib.sha256(b"NVIDIA DLL").hexdigest()
+        orig = main.dlss_download
+        main.dlss_download = lambda release: (url, sha)
+        try:
+            async def go():
+                r = await main.Plugin().start_setup("v2.0.0")
+                self.assertTrue(r["ok"], r)
+                for _ in range(100):
+                    if main.SETUP_RC.exists():
+                        break
+                    await asyncio.sleep(0.05)
+            asyncio.run(go())
+        finally:
+            main.dlss_download = orig
+        time.sleep(0.1)
+        self.assertTrue(record.exists(), main.SETUP_LOG.read_text())
+        rec = record.read_text()
+        self.assertIn("--no-fg --dlss", rec)
+        self.assertNotIn("--yes", rec)
+        self.assertIn("dll there", rec)
+        self.assertIn("no input", rec)
+        self.assertEqual(main.SETUP_RC.read_text().strip(), "0")
+        self.assertFalse((main.SETUP_TMP / "nvngx_dlss.dll").exists())
+        self.assertIn("downloading nvngx_dlss.dll from NVIDIA", main.SETUP_LOG.read_text())
+
+    def test_a_wrong_checksum_stops_before_the_setup(self):
+        d = HOME / "HelixSR/v2.0.0"
+        main.save_settings({"helix_dir": str(HOME / "HelixSR"), "active": "v2.0.0"})
+        nvidia = write(HOME / "nvidia/nvngx_dlss.dll", b"something else")
+        record = HOME / "record.txt"
+        write(d / "helixsr-setup.sh", f'# HelixSR Freeware License\necho ran > "{record}"\n')
+        write(d / "setup/helixsr_setup.py", "")
+        orig = main.dlss_download
+        main.dlss_download = lambda release: (nvidia.as_uri(), "00" * 32)
+        try:
+            async def go():
+                await main.Plugin().start_setup("v2.0.0")
+                for _ in range(100):
+                    if main.SETUP_RC.exists():
+                        break
+                    await asyncio.sleep(0.05)
+            asyncio.run(go())
+        finally:
+            main.dlss_download = orig
+        self.assertFalse(record.exists())
+        self.assertNotEqual(main.SETUP_RC.read_text().strip(), "0")
+        self.assertIn("could not be downloaded or verified", main.SETUP_LOG.read_text())

@@ -42,7 +42,7 @@ OptiScaler.
   needed buttons (download again, delete, clean up, diagnostics, debug report) behind **More options**.
 - **Clean up (optional):** remove every downloaded release and the setup's downloads in one go. Not needed for updates.
 
-> **HelixSR has changed its approach a few times.** Up to 1.4 and again **from 1.7** (tested up to 1.9.3), it replaces
+> **HelixSR has changed its approach a few times.** Up to 1.4 and again **from 1.7** (tested up to 2.0.0), it replaces
 > FSR 3.1 (`amd_fidelityfx_dx12.dll`): through OptiScaler for DLSS games (select DLSS in the game), or in place of a
 > game's own FSR 3.1. 1.5 and 1.6 instead replaced DLSS (`nvngx.dll`) through OptiScaler and needed a Steam launch
 > option; those releases were withdrawn upstream, but the plugin still supports a 1.5 you already downloaded.
@@ -50,8 +50,11 @@ OptiScaler.
 > From 1.7, HelixSR's own setup also installs its own OptiScaler into your games when run in a terminal. Up to 1.8.1
 > the plugin runs only the build part of that setup, so HelixSR's own game installer never starts. From 1.9 (HelixSR's
 > setup may no longer be modified) the setup runs as published: after the build its game installer starts, gets no
-> answer and ends without changing any game. Either way the plugin then installs per game itself, into the OptiScaler
-> the game already has. 1.9.0's setup can also build frame generation for HelixSR Scaler (about 400 MB of NVIDIA
+> answer and ends without changing any game. The plugin never passes `--yes` to these setups (from 2.0 it would also
+> answer the game installer and install into every game): it downloads NVIDIA's DLSS DLL itself from NVIDIA's GitHub,
+> checked against the checksum HelixSR's setup names, and hands it over with `--dlss`, so the setup has nothing to ask.
+> Either way the plugin then installs per game itself, into the OptiScaler the game already has. From 2.0 HelixSR's DLL
+> sits in the release's `HelixSR-fsrfg` folder. 1.9.0's setup can also build frame generation for HelixSR Scaler (about 400 MB of NVIDIA
 > downloads); the plugin skips that (`--no-fg`), since it doesn't install HelixSR Scaler. Games set up with HelixSR
 > Desktop's HelixSR Scaler (OptiScaler with HelixSR built in) are shown with the check, but left to HelixSR Desktop. Games already set up by HelixSR's own setup are shown, but left to
 > that setup, including 1.8.1's experimental "DLSS without OptiScaler" route (HelixSR's loader as `dxgi.dll` and
@@ -147,7 +150,8 @@ live side-by-side comparison, switch between "FSR HelixSR (3.1.5)" and FSR 3.1.5
 ### 5. Settings, disable and undo
 
 - **Sharpening:** **Sharpening** (NVIDIA's Image Sharpening or AMD's RCAS) and **Sharpness**. Off by default, as DLSS
-  (1.9.0's pre-release sharpened lightly by default; the plugin reads which one a game has).
+  (1.9.0's pre-release sharpened lightly by default; the plugin reads which one a game has). Sharpness defaults to 0.1
+  in 1.9.x and 0.5 from 2.0.
 - **Int8 network (Speed Boost):** Auto, On or Off where the release reads it (1.9.0's pre-release, 1.9.3 and newer);
   the 1.9.0 release picks it automatically. Up to 1.4: the release's sharpening mode and network resolution.
   Changes take effect after restarting the game.
