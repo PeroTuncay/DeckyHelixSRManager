@@ -399,6 +399,9 @@ HEROIC_FILES = [("gog_store/installed.json", "GOG"), ("nile_config/nile/installe
                 ("nile_config/installed.json", "Amazon"), ("legendaryConfig/legendary/installed.json", "Epic")]
 LEGENDARY_FILES = [HOME / ".config/legendary/installed.json",
                    HOME / ".var/app/com.heroicgameslauncher.hgl/config/legendary/installed.json"]
+# Xodus Nexus (Microsoft Store / Game Pass games, an Electron AppImage): its profile's launcher-state.json lists each game
+# with its install folder and installState ("ready", "imported", or "incomplete" while downloading).
+XODUS_STATE = HOME / ".config/Xodus Nexus/launcher-state.json"
 LUTRIS = [  # (game configs, database), native and Flatpak
     (HOME / ".config/lutris/games", HOME / ".local/share/lutris/pga.db"),
     (HOME / ".local/share/lutris/games", HOME / ".local/share/lutris/pga.db"),
@@ -637,6 +640,20 @@ def legendary_games():
     return out
 
 
+def xodus_games():
+    """Microsoft Store / Game Pass games installed through Xodus Nexus; unfinished downloads are left out."""
+    data = read_json_capped(XODUS_STATE)
+    items = data.get("games") if isinstance(data, dict) else None
+    out = []
+    for g in items if isinstance(items, list) else []:
+        if not isinstance(g, dict) or g.get("installState") not in ("ready", "imported"):
+            continue
+        folder = g.get("path")
+        if isinstance(folder, str) and os.path.isabs(folder) and os.path.isdir(folder):
+            out.append(store_game("xodus", "Xbox", folder, g.get("title")))
+    return out
+
+
 def lutris_installed(db):
     """{config name: (name, directory)} of installed Wine games in a Lutris database, read-only; None if unreadable
     (or no sqlite3 in this Python)."""
@@ -713,6 +730,7 @@ STORES = [  # (id, label, what it covers)
     ("heroic", "Heroic Games Launcher", "GOG, Epic and Amazon games installed through Heroic"),
     ("legendary", "Legendary", "Epic games installed with the Legendary command-line client"),
     ("lutris", "Lutris", "Windows games installed through Lutris"),
+    ("xodus", "Xodus Nexus", "Microsoft Store and Game Pass games installed through Xodus Nexus (experimental)"),
     ("shortcuts", "Non-Steam games in Steam", "Games added with Steam's \"Add a non-Steam game\""),
 ]
 
@@ -732,6 +750,8 @@ def store_found(sid):
         return any(f.is_file() for f in LEGENDARY_FILES)
     if sid == "lutris":
         return any(c.is_dir() or db.is_file() for c, db in LUTRIS)
+    if sid == "xodus":
+        return XODUS_STATE.is_file()
     if sid == "shortcuts":
         return any(any(r.glob("userdata/*/config/shortcuts.vdf")) for r in steam_roots())
     return False
@@ -746,6 +766,8 @@ def store_games(sid, shortcuts, unresolved=None):
         return legendary_games()
     if sid == "lutris":
         return lutris_games()
+    if sid == "xodus":
+        return xodus_games()
     if sid == "shortcuts":
         return shortcut_games(shortcuts, unresolved)
     return []
@@ -753,7 +775,7 @@ def store_games(sid, shortcuts, unresolved=None):
 
 def all_games(notes=None):
     """Steam games plus games from the stores switched on, plus added folders, by id. A folder listed twice keeps its
-    first source (Steam, Unifideck, Heroic, Legendary, Lutris, a shortcut, an added folder). With a list for notes, the
+    first source (Steam, Unifideck, Heroic, Legendary, Lutris, Xodus Nexus, a shortcut, an added folder). With a list for notes, the
     names of Steam shortcuts whose game folder couldn't be found (and that no other source listed) are added to it."""
     games = {k: {**g, "source": "steam"} for k, g in installed_games().items()}
     seen = {os.path.realpath(g["path"]) for g in games.values()}

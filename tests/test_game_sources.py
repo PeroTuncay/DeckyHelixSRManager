@@ -87,6 +87,51 @@ class UnifideckTest(FakeHomeTest):
         self.assertEqual((g["name"], g["shortcut_appid"]), ("Crown", None))
 
 
+class XodusNexusTest(FakeHomeTest):
+    """Xodus Nexus' launcher-state.json (Electron profile under ~/.config/Xodus Nexus)."""
+
+    def state(self, games):
+        write(main.XODUS_STATE, json.dumps({"games": games, "downloads": [], "settings": {}}))
+
+    def test_ready_and_imported_games_are_listed(self):
+        hal = game(HOME / "Games/Xodus Nexus/Halo", "MCC-Win64-Shipping.exe")
+        fh5 = game(HOME / "Games/Xodus Nexus/Forza", "ForzaHorizon5.exe")
+        self.state([{"id": "a", "title": "Halo MCC", "path": str(hal), "installState": "ready"},
+                    {"id": "b", "title": "Forza Horizon 5", "path": str(fh5), "installState": "imported"}])
+        got = {(g["name"], g["source"], g["store"]) for g in main.xodus_games()}
+        self.assertEqual(got, {("Halo MCC", "xodus", "Xbox"), ("Forza Horizon 5", "xodus", "Xbox")})
+
+    def test_downloads_missing_and_relative_folders_are_skipped(self):
+        part = game(HOME / "Games/Xodus Nexus/Partial", "a.exe")
+        self.state([{"title": "Partial", "path": str(part), "installState": "incomplete"},
+                    {"title": "Gone", "path": "/nope", "installState": "ready"},
+                    {"title": "Relative", "path": "Games/X", "installState": "ready"},
+                    {"title": "No state", "path": str(part)}, "junk", None])
+        self.assertEqual(main.xodus_games(), [])
+
+    def test_broken_or_oversized_state_is_ignored(self):
+        write(main.XODUS_STATE, "{broken")
+        self.assertEqual(main.xodus_games(), [])
+        write(main.XODUS_STATE, " " * (main.MAX_JSON + 1))
+        self.assertEqual(main.xodus_games(), [])
+        write(main.XODUS_STATE, json.dumps({"games": {"not": "a list"}}))
+        self.assertEqual(main.xodus_games(), [])
+
+    def test_only_listed_when_switched_on_and_folder_may_be_changed(self):
+        hal = game(HOME / "Games/Xodus Nexus/Halo", "halo.exe")
+        self.state([{"title": "Halo", "path": str(hal), "installState": "ready"}])
+        self.assertEqual(list(main.all_games()), [])
+        self.assertTrue(main.store_found("xodus"))
+        enable_stores("xodus")
+        self.assertEqual([g["name"] for g in main.all_games().values()], ["Halo"])
+        self.assertIn(os.path.realpath(hal), main.game_roots())
+
+    def test_home_folder_is_never_a_game(self):
+        self.state([{"title": "Whole home?", "path": str(HOME), "installState": "ready"}])
+        enable_stores("xodus")
+        self.assertEqual(list(main.all_games()), [])
+
+
 class HeroicLegendaryTest(FakeHomeTest):
     def test_gog_amazon_epic_native_and_flatpak(self):
         w3, rings, fn = (game(HOME / f"Games/{n}", "a.exe") for n in ("Witcher3", "Rings", "Fortnite"))
@@ -267,7 +312,7 @@ class OptInTest(FakeHomeTest):
 
     def test_store_list_reports_found_and_counts(self):
         stores = {s["id"]: s for s in run(main.Plugin().get_stores())}
-        self.assertEqual(list(stores), ["unifideck", "heroic", "legendary", "lutris", "shortcuts"])
+        self.assertEqual(list(stores), ["unifideck", "heroic", "legendary", "lutris", "xodus", "shortcuts"])
         self.assertEqual((stores["legendary"]["found"], stores["legendary"]["count"], stores["legendary"]["enabled"]),
                          (True, 1, False))
         self.assertEqual((stores["heroic"]["found"], stores["heroic"]["count"]), (False, 0))

@@ -181,7 +181,7 @@ const SHARPNESS = ["0.1", "0.2", "0.3", "0.4", "0.5", "0.6", "0.7", "0.8", "0.9"
 
 // source: where the game comes from. Non-Steam games: Unifideck's games.map, Steam shortcuts that start a game's .exe,
 // or a folder the user added.
-type GameSource = "steam" | "unifideck" | "heroic" | "legendary" | "lutris" | "shortcut" | "folder";
+type GameSource = "steam" | "unifideck" | "heroic" | "legendary" | "lutris" | "xodus" | "shortcut" | "folder";
 type GameSummary = {
   appid: string;
   name: string;
@@ -199,6 +199,7 @@ const SOURCE_LABEL: Record<GameSource, string> = {
   heroic: "Heroic",
   legendary: "Legendary",
   lutris: "Lutris",
+  xodus: "Xodus Nexus",
   shortcut: "non-Steam",
   folder: "added folder",
 };

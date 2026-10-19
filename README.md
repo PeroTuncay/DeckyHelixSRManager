@@ -21,8 +21,8 @@ OptiScaler.
   notice if the author later replaces the zip) and build it with a progress bar. Several releases can sit side by side.
 - **Per game, two routes:** in place of a game's own FSR 3.1, or through the OptiScaler the game already has (for
   example from Decky Framegen), keeping your current FSR 4 selectable for comparison.
-- **Games from other stores (opt-in):** Unifideck, Heroic (GOG, Amazon, Epic), Legendary, Lutris and games added to
-  Steam by hand, each switched on in **Other Stores**, plus **Add game folder** for anything else. Only the folders the
+- **Games from other stores (opt-in):** Unifideck, Heroic (GOG, Amazon, Epic), Legendary, Lutris, Xodus Nexus
+  (Microsoft Store / Game Pass) and games added to Steam by hand, each switched on in **Other Stores**, plus **Add game folder** for anything else. Only the folders the
   stores name are read, so the game list stays fast.
 - **Safe changes:** refuses while the game is running or Steam is still updating it, warns about anti-cheat (online
   bans) and asks you to confirm, keeps the game's original files, and puts everything back on removal. Disable keeps
@@ -172,11 +172,18 @@ Installation and Game Configuration) and switch on the stores you use. Each togg
 | **Heroic Games Launcher** (GOG, Amazon, Epic; native and Flatpak) | Heroic's `installed.json` files |
 | **Legendary** (Epic) | Legendary's `installed.json` |
 | **Lutris** | Lutris' game configs and its database (read-only; installed Windows games only). Not tested on a real device yet. |
+| **Xodus Nexus** (Microsoft Store, Game Pass) | Xodus Nexus' `~/.config/Xodus Nexus/launcher-state.json` (finished installs only). Experimental, see below. |
 | **Non-Steam games in Steam** | Steam's shortcuts that start a game's `.exe` directly (Steam → "Add a non-Steam game") |
 
 In the game list, each of these games carries its source ("· Heroic (GOG)", "· Unifideck", …). Shortcuts that start a
 game through a launcher can't name the game's folder; the section lists them and suggests **Add game folder**, which
 adds any game by picking its install folder (and **Remove from the list** takes it out again; the game's files stay).
+
+**Xodus Nexus is experimental.** Its games run in Xodus' own Proton runtime, not through Steam, and Microsoft Store
+packages keep some files encrypted (Xodus decrypts them while starting the game). Whether a game picks up
+HelixSR's DLL depends on whether its FSR DLL is one of those encrypted files; the status line shows it after a
+launch. Games with anti-cheat are refused as usual unless you confirm. A game update through Xodus may put the
+original DLL back; install again afterwards.
 
 The plugin only reads the folders the stores name; it never crawls whole drives. It only ever changes files inside a
 listed game's own folder: never `/`, your home folder, a whole drive or SD card, and nothing of a store that is off.
@@ -230,7 +237,7 @@ next to HelixSR, since HelixSR has none of its own; OptiScaler's own frame gener
 10. **Disable / Enable**: a direct install parks HelixSR's DLL as `*.helixsr-disabled.dll` and puts the game's file
     back; an OptiScaler install restores the previous `OptiScaler.ini` values and keeps the `HelixSR` folder. Enable
     switches back without downloading or building anything.
-11. **Other stores** (opt-in): reads the install lists of Unifideck, Heroic, Legendary and Lutris and Steam's
+11. **Other stores** (opt-in): reads the install lists of Unifideck, Heroic, Legendary, Lutris and Xodus Nexus and Steam's
     `shortcuts.vdf` (each file size-capped, the Lutris database read-only), plus folders added by hand. Each listed
     game's folder becomes the only place the plugin may change files for that game.
 
