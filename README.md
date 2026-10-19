@@ -250,6 +250,11 @@ npm test            # unit tests (Python's unittest, no extra packages)
 - If the setup fails in Gaming Mode, run it once from Konsole in Desktop Mode, e.g.
   `~/HelixSR/v1.4.1/helixsr-setup.sh`; the plugin picks up the built DLL afterwards.
 - Direct3D 12 only. Vulkan games aren't supported by HelixSR.
+- **Frame generation:** HelixSR 2.0's own frame generation (it runs NVIDIA's DLSS frame generation in games that have
+  DLSS Frame Generation) needs HelixSR Scaler, which HelixSR Desktop or HelixSR's setup installs; the plugin doesn't,
+  and skips building it (`--no-fg`, saving about 400 MB of NVIDIA downloads). OptiScaler's own frame generation (AMD
+  FSR or XeSS frame generation, e.g. from Decky Framegen) keeps working next to the plugin's HelixSR install: the
+  plugin keeps the FSR frame generation DLL available next to HelixSR.
 - Close the game before installing or reverting.
 - Where other stores keep their install lists (and their formats) was learned from
   [HelixSR-Decky](https://github.com/dawoodtogoo2020-code/HelixSR-Decky) (MIT) and from
