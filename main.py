@@ -401,7 +401,9 @@ LEGENDARY_FILES = [HOME / ".config/legendary/installed.json",
                    HOME / ".var/app/com.heroicgameslauncher.hgl/config/legendary/installed.json"]
 # Xodus Nexus (Microsoft Store / Game Pass games, an Electron AppImage): its profile's launcher-state.json lists each game
 # with its install folder and installState ("ready", "imported", or "incomplete" while downloading).
-XODUS_STATE = HOME / ".config/Xodus Nexus/launcher-state.json"
+# The profile folder is ~/.config/xodus-nexus (0.3.7 on a Deck); "Xodus Nexus" (its product name) is checked as well.
+XODUS_STATE = HOME / ".config/xodus-nexus/launcher-state.json"
+XODUS_STATES = [XODUS_STATE, HOME / ".config/Xodus Nexus/launcher-state.json"]
 LUTRIS = [  # (game configs, database), native and Flatpak
     (HOME / ".config/lutris/games", HOME / ".local/share/lutris/pga.db"),
     (HOME / ".local/share/lutris/games", HOME / ".local/share/lutris/pga.db"),
@@ -642,7 +644,8 @@ def legendary_games():
 
 def xodus_games():
     """Microsoft Store / Game Pass games installed through Xodus Nexus; unfinished downloads are left out."""
-    data = read_json_capped(XODUS_STATE)
+    state = next((f for f in XODUS_STATES if f.is_file()), XODUS_STATE)
+    data = read_json_capped(state)
     items = data.get("games") if isinstance(data, dict) else None
     out = []
     for g in items if isinstance(items, list) else []:
@@ -751,7 +754,7 @@ def store_found(sid):
     if sid == "lutris":
         return any(c.is_dir() or db.is_file() for c, db in LUTRIS)
     if sid == "xodus":
-        return XODUS_STATE.is_file()
+        return any(f.is_file() for f in XODUS_STATES)
     if sid == "shortcuts":
         return any(any(r.glob("userdata/*/config/shortcuts.vdf")) for r in steam_roots())
     return False

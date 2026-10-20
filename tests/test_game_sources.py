@@ -88,7 +88,7 @@ class UnifideckTest(FakeHomeTest):
 
 
 class XodusNexusTest(FakeHomeTest):
-    """Xodus Nexus' launcher-state.json (Electron profile under ~/.config/Xodus Nexus)."""
+    """Xodus Nexus' launcher-state.json (Electron profile under ~/.config/xodus-nexus, or ~/.config/Xodus Nexus)."""
 
     def state(self, games):
         write(main.XODUS_STATE, json.dumps({"games": games, "downloads": [], "settings": {}}))
@@ -100,6 +100,13 @@ class XodusNexusTest(FakeHomeTest):
                     {"id": "b", "title": "Forza Horizon 5", "path": str(fh5), "installState": "imported"}])
         got = {(g["name"], g["source"], g["store"]) for g in main.xodus_games()}
         self.assertEqual(got, {("Halo MCC", "xodus", "Xbox"), ("Forza Horizon 5", "xodus", "Xbox")})
+
+    def test_profile_folder_named_after_the_product_also_works(self):
+        hal = game(HOME / "Games/Xodus Nexus/Halo", "MCC-Win64-Shipping.exe")
+        write(HOME / ".config/Xodus Nexus/launcher-state.json",
+              json.dumps({"games": [{"title": "Halo MCC", "path": str(hal), "installState": "ready"}]}))
+        self.assertTrue(main.store_found("xodus"))
+        self.assertEqual([g["name"] for g in main.xodus_games()], ["Halo MCC"])
 
     def test_downloads_missing_and_relative_folders_are_skipped(self):
         part = game(HOME / "Games/Xodus Nexus/Partial", "a.exe")
