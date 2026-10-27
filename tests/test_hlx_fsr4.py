@@ -1,0 +1,258 @@
+"""HelixSR 3.0: HLX FSR 4 (AMD's FSR 4 network on HelixSR's pipeline) is the FSR drop-in. Its shaders are built by the
+setup from AMD's FSR 4 driver file, which the setup downloads only after a yes on a terminal, so the plugin builds it in
+a second step. Run: npm test."""
+import asyncio
+import hashlib
+import json
+import os
+import stat
+import struct
+import time
+from pathlib import Path
+
+from support import HOME, FakeHomeTest, main, write
+from test_helixsr_releases import fake_dll
+
+
+def fake_hlx(path, built=False):
+    """A stand-in HLX FSR 4 DLL; built: with the shaders the setup appends (data, tag, size, 8 more bytes)."""
+    data = b"MZ" + b"\0" * 64 + b"HLX FSR 4 (4.1.2)\0"
+    if built:
+        payload = b"S" * 32
+        data += payload + main.HLX_DATA_MAGIC + struct.pack("<Q", len(payload)) + b"\0" * 8
+    return write(path, data)
+
+
+def release(built=False):
+    d = HOME / "HelixSR/v3.0.0"
+    fake_hlx(d / "HLX-FSR4/amd_fidelityfx_upscaler_dx12.dll", built)
+    fake_dll(d / "HelixSR/helixsr.dll", "3.0.0", ["Int8", "Sharpener", "Sharpness"])
+    write(d / "HelixSR/helixsr.ini", "[Sharpening]\nSharpener = off\n")
+    write(d / "setup/hlxfsr4/hlx/amd.py", "")
+    write(d / "setup/helixsr_setup.py", "")
+    return d
+
+
+class Release300Test(FakeHomeTest):
+    def test_hlx_fsr4_is_the_release_dll(self):
+        d = release()
+        dll = main.release_dll(d)
+        self.assertEqual(dll, d / "HLX-FSR4/amd_fidelityfx_upscaler_dx12.dll")
+        self.assertTrue(main.is_helixsr(dll))
+        self.assertEqual(main.upscaler_name(dll), "HLX FSR 4")
+        self.assertEqual(main.release_version(d), "3.0.0")
+        self.assertEqual(main.dll_kind(dll), "ffx")
+
+    def test_built_means_hlx_fsr4_shaders_appended(self):
+        self.assertFalse(main.has_network(main.release_dll(release(built=False))))
+        self.assertTrue(main.has_network(main.release_dll(release(built=True))))
+
+    def test_listed_with_its_version(self):
+        release(built=True)
+        main.save_settings({"helix_dir": str(HOME / "HelixSR")})
+        v = next(v for v in main.local_versions() if v["tag"] == "v3.0.0")
+        self.assertEqual((v["version"], v["built"], v["upscaler"]), ("3.0.0", True, "HLX FSR 4"))
+
+    def test_second_step_only_for_releases_with_hlx_fsr4(self):
+        self.assertIsNotNone(main.hlx_step_script(release()))
+        d = HOME / "HelixSR/v2.0.0"
+        write(d / "setup/helixsr_setup.py", "")
+        self.assertIsNone(main.hlx_step_script(d))
+
+    def test_second_step_never_starts_the_game_installer(self):
+        s = main.hlx_step_script(release())
+        self.assertIn("--fg-only", s)
+        self.assertNotIn("helixsr-setup.sh", s)
+        self.assertNotIn("helixsr_install", s)
+
+
+class DirectInstallTest(FakeHomeTest):
+    def game_dll(self, name="amd_fidelityfx_upscaler_dx12.dll"):
+        return write(HOME / "Games/G/bin" / name, b"MZ AMD FidelityFX upscaler")
+
+    def test_install_keeps_the_games_fsr_as_original_and_writes_the_marker(self):
+        d = release(built=True)
+        t = self.game_dll()
+        main.install_direct(t, main.release_dll(d), main.release_ini(d))
+        self.assertTrue(main.is_hlx(t))
+        self.assertEqual(main.original_of(t).read_bytes(), b"MZ AMD FidelityFX upscaler")
+        rec = json.loads((t.parent / main.INSTALL_MARKER).read_text())
+        self.assertEqual(rec, {"helixsr": "3.0.0", "upscaler": "HLX FSR 4", "files": [t.name], "route": "direct"})
+        self.assertFalse((t.parent / "helixsr.ini").exists())   # HLX FSR 4 has no settings file
+        self.assertEqual(main.helix_version(t), "3.0.0")
+
+    def test_update_from_20_drops_an_unchanged_helixsr_ini(self):
+        d = release(built=True)
+        t = self.game_dll("amd_fidelityfx_dx12.dll")
+        main.install_direct(t, fake_dll(HOME / "old/amd_fidelityfx_dx12.dll", "2.0.0"), Path("/nonexistent"))
+        write(t.parent / "helixsr.ini", "[Sharpening]\nSharpener = off\nSharpness = 0.5\n")
+        main.install_direct(t, main.release_dll(d), main.release_ini(d))
+        self.assertTrue(main.is_hlx(t))
+        self.assertFalse((t.parent / "helixsr.ini").exists())
+
+    def test_disable_enable_and_uninstall(self):
+        d = release(built=True)
+        t = self.game_dll()
+        main.install_direct(t, main.release_dll(d), main.release_ini(d))
+        write(t.parent / main.HLX_LOG, "x")
+        main.disable_direct(t)
+        self.assertFalse(main.is_hlx(t))
+        main.enable_direct(t)
+        self.assertTrue(main.is_hlx(t))
+        main.uninstall_direct(t, main.release_ini(d))
+        self.assertEqual(t.read_bytes(), b"MZ AMD FidelityFX upscaler")
+        self.assertFalse((t.parent / main.HLX_LOG).exists())
+        self.assertFalse((t.parent / main.INSTALL_MARKER).exists())
+
+    def test_settings_refused(self):
+        d = release(built=True)
+        t = self.game_dll()
+        main.install_direct(t, main.release_dll(d), main.release_ini(d))
+        main.save_settings({"helix_dir": str(HOME / "HelixSR"), "active": "v3.0.0"})
+        orig = main.inside_library
+        main.inside_library = lambda p: True
+        try:
+            r = asyncio.run(main.Plugin().set_helix_option(str(t.parent), "sharpener", "rcas"))
+        finally:
+            main.inside_library = orig
+        self.assertFalse(r["ok"])
+        self.assertIn("no settings", r["error"])
+
+
+OPTI_INI = """[Upscalers]
+; fsr21, fsr22, fsr31, ffx, xess, dlss
+Dx12Upscaler = auto
+[Libraries]
+FfxDx12Path = auto
+FfxDx12SRPath = auto
+"""
+
+
+class OptiScalerInstallTest(FakeHomeTest):
+    def opti(self):
+        o = HOME / "Games/O"
+        write(o / "OptiScaler.ini", OPTI_INI)
+        write(o / "amd_fidelityfx_upscaler_dx12.dll", b"MZ AMD FSR 4 upscaler")
+        write(o / "amd_fidelityfx_dx12.dll", b"MZ AMD FidelityFX")
+        return o
+
+    def test_hlx_fsr4_is_the_fsr_upscaler_with_amds_listed_after_it(self):
+        d = release(built=True)
+        o = self.opti()
+        msg = main.install_optiscaler(o, main.release_dll(d), main.release_ini(d), False)
+        sub = o / main.OPTI_SUBDIR
+        self.assertIn("HLX FSR 4", msg)
+        self.assertTrue(main.is_hlx(sub / "amd_fidelityfx_upscaler_dx12.dll"))
+        self.assertEqual((sub / main.FSR4_COPY_NAME).read_bytes(), b"MZ AMD FSR 4 upscaler")
+        self.assertFalse((sub / "amd_fidelityfx_dx12.dll").exists())
+        text = (o / "OptiScaler.ini").read_text()
+        self.assertEqual(main.ini_get(text, "Libraries", "FfxDx12Path"), "auto")   # the game's FidelityFX DLL stays
+        self.assertEqual(main.ini_get(text, "Upscalers", "Dx12Upscaler"), "ffx")
+        st = main.opti_state(o, o)
+        self.assertTrue(st["configured"])
+        self.assertEqual((st["helix_version"], st["upscaler"]), ("3.0.0", "HLX FSR 4"))
+        main.uninstall_optiscaler(o)
+        self.assertEqual((o / "OptiScaler.ini").read_text(), OPTI_INI)
+
+    def test_switch_from_20_puts_ffxdx12path_back(self):
+        o = self.opti()
+        old = fake_dll(HOME / "old/amd_fidelityfx_dx12.dll", "2.0.0")
+        main.install_optiscaler(o, old, Path("/nonexistent"), False)
+        self.assertNotEqual(main.ini_get((o / "OptiScaler.ini").read_text(), "Libraries", "FfxDx12Path"), "auto")
+        d = release(built=True)
+        main.install_optiscaler(o, main.release_dll(d), main.release_ini(d), True)
+        text = (o / "OptiScaler.ini").read_text()
+        self.assertEqual(main.ini_get(text, "Libraries", "FfxDx12Path"), "auto")
+        self.assertFalse((o / main.OPTI_SUBDIR / "amd_fidelityfx_dx12.dll").exists())
+        main.uninstall_optiscaler(o)
+        self.assertEqual((o / "OptiScaler.ini").read_text(), OPTI_INI)
+
+
+class LogTest(FakeHomeTest):
+    def folder(self, log):
+        f = HOME / "Games/L"
+        fake_hlx(f / "amd_fidelityfx_upscaler_dx12.dll", True)
+        write(f / main.HLX_LOG, log)
+        return f
+
+    def test_running(self):
+        c = main.helix_log_check(self.folder(
+            "[10:00:00.000000] [I] HLX-FSR-4 GPU: AMD Custom GPU 0405 (PCI 1002:1435)\n"
+            "[10:00:01.000000] [I] HLX-FSR-4 own runtime active: wave32 (tier 2), output 1280x800, max render 1280x800, flags 0x1\n"))
+        self.assertEqual((c["status"], c["log"]), ("running", main.HLX_LOG))
+
+    def test_not_built(self):
+        c = main.helix_log_check(self.folder(
+            "[10:00:00.000000] [I] HLX-FSR-4 HLX FSR 4's shaders are not built yet: run the HelixSR setup (AMD's FSR runs meanwhile)\n"))
+        self.assertEqual(c["status"], "error")
+
+    def test_amds_fsr_takes_over(self):
+        c = main.helix_log_check(self.folder(
+            "[10:00:00.000000] [I] HLX-FSR-4 create: HLX FSR 4 does not cover this (see the line above): AMD's original instead\n"))
+        self.assertEqual(c["status"], "fallback")
+
+
+class SetupProgressTest(FakeHomeTest):
+    def test_second_step_progress(self):
+        lines = ["[helixsr-setup] done: /x/HelixSR/helixsr.dll now carries the network (72 shaders, 7.5 MB, checked on disk)",
+                 main.HLX_STEP_LINE + " (AMD's FSR 4 driver file, about 420 MB from AMD)",
+                 "[helixsr-setup] [##########----------]  50%  0:30  HLX FSR 4 shaders"]
+        pct, label = main.phase_of(lines)
+        self.assertEqual(pct, 60 + 19)
+        self.assertIn("HLX FSR 4 shaders", label)
+        pct, label = main.phase_of(lines + ["[helixsr-setup] done: HLX FSR 4 built (812 shaders, checked) into /x"])
+        self.assertEqual((pct, label), (100, "Finished"))
+
+
+class SetupWrapper300Test(FakeHomeTest):
+    """The real start_setup for a 3.0 release with stand-ins: the setup builds the network and stops at AMD's download
+    (exit 1, as 3.0's does without a terminal); the second step then runs the release's helixsr_setup.py with
+    --fg-only --yes through the setup's Python, compiler and Wine, and the setup itself never gets --yes."""
+
+    def test_two_steps(self):
+        d = release(built=False)
+        main.save_settings({"helix_dir": str(HOME / "HelixSR"), "active": "v3.0.0"})
+        setup_rec, step_rec = HOME / "setup.txt", HOME / "step.txt"
+        py = write(HOME / "fakepy/python3",
+                   "#!/bin/bash\n"
+                   f'if [ "$3" = --status ]; then [ -f "{step_rec}" ] && echo "network=1 fg=1 hlx=1" '
+                   '|| echo "network=1 fg=1 hlx=0"; exit 0; fi\n'
+                   f'echo "$*" > "{step_rec}"\n'
+                   'echo "[helixsr-setup] done: HLX FSR 4 built (812 shaders, checked) into x"\n')
+        os.chmod(py, os.stat(py).st_mode | stat.S_IEXEC)
+        data = HOME / ".local/share/HelixSR"
+        write(data / "dxc-wine.sh", f'WINEPREFIX="{data}/wineprefix" WINEDEBUG=-all exec "/opt/proton/bin/wine" '
+                                    f'"{data}/dxc-win/bin/x64/dxc.exe" "${{args[@]}}"\n')
+        write(data / "dxc-win-2609/bin/x64/dxc.exe", b"")
+        write(d / "helixsr-setup.sh",
+              "# HelixSR Freeware License\n# --rebuild --no-fg\n"
+              f'echo "$*" > "{setup_rec}"\n'
+              f'echo "[helixsr-setup] python: {py}"\n'
+              "echo \"AMD's file is needed for HLX FSR 4\" >&2\n"
+              'echo "[helixsr-setup] error: the setup stopped (exit 1)" >&2\nexit 1\n')
+        orig = main.dlss_download
+        nv = write(HOME / "nv.dll", b"N")
+        main.dlss_download = lambda r: (nv.as_uri(), hashlib.sha256(b"N").hexdigest())
+        try:
+            async def go():
+                r = await main.Plugin().start_setup("v3.0.0")
+                self.assertTrue(r["ok"], r)
+                for _ in range(200):
+                    if main.SETUP_RC.exists():
+                        break
+                    await asyncio.sleep(0.05)
+            asyncio.run(go())
+        finally:
+            main.dlss_download = orig
+        time.sleep(0.1)
+        log = main.SETUP_LOG.read_text()
+        self.assertTrue(step_rec.exists(), log)
+        self.assertNotIn("--yes", setup_rec.read_text())
+        step = step_rec.read_text()
+        for a in ("--fg-only", "--no-fg", "--yes", "--wine /opt/proton/bin/wine",
+                  f"--dxc2609-dir {data}/dxc-win-2609/bin/x64", f"--dxc {data}/dxc-wine.sh"):
+            self.assertIn(a, step)
+        self.assertEqual(main.SETUP_RC.read_text().strip(), "0", log)
+        st = main.setup_status()
+        self.assertEqual(st["errors"], [])
+        self.assertEqual(st["phase"], "Finished")
