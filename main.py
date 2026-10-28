@@ -1208,14 +1208,28 @@ def helix_state():
             "dlss_built": bool(cur and cur["dlss_built"])}
 
 
-def built_dll():
-    d = active_dir()
+def built_dll(tag=None):
+    """The selected release's DLL for games, or (tag) that downloaded release's."""
+    tag = tag or active_tag()
+    d = version_dir(tag) if tag else active_dir()
     dll = release_dll(d)
     if not dll:
-        raise RuntimeError(f"HelixSR {active_tag()} isn't downloaded yet ({d}).")
+        raise RuntimeError(f"HelixSR {tag} isn't downloaded yet ({d}).")
     if not has_network(dll):
-        raise RuntimeError(f"HelixSR {active_tag()} has no network yet. Run its setup first "
+        raise RuntimeError(f"HelixSR {tag} has no network yet. Run its setup first "
                            f"(otherwise games show a red frame).")
+    return dll
+
+
+def own_network_dll(tag):
+    """A release with HelixSR's own network (before 3.0: not HLX FSR 4, not the 1.5/1.6 DLSS replacement), built, for
+    the OptiScaler section of a 3.x release: its HLX DLSS needs HelixSR Scaler, so HelixSR's DLSS network comes from
+    the newest such release (2.0.0) instead."""
+    if not valid_tag(tag) or not any(v["tag"] == tag for v in local_versions()):
+        raise RuntimeError(f"HelixSR {tag} isn't downloaded.")
+    dll = built_dll(tag)
+    if is_hlx(dll) or dll_kind(dll) != "ffx":
+        raise RuntimeError(f"HelixSR {tag} has no network of its own to install next to HLX FSR 4.")
     return dll
 
 
@@ -1905,6 +1919,9 @@ def install_optiscaler(opti_dir, dll, ini_src, keep_fsr4):
     if keep_fsr4 and cur_sr and not is_helixsr(cur_sr):
         shutil.copyfile(cur_sr, sub / FSR4_COPY_NAME)
         htext = ini_set(htext, "Forwarding", "UpscalerDll", FSR4_COPY_NAME)
+    elif keep_fsr4 and (sub / FSR4_COPY_NAME).exists():
+        # AMD's FSR an earlier install here kept (HLX FSR 4 lists it after itself): OptiScaler now points at HelixSR
+        htext = ini_set(htext, "Forwarding", "UpscalerDll", FSR4_COPY_NAME)
     elif not keep_fsr4:
         if (sub / FSR4_COPY_NAME).exists():
             (sub / FSR4_COPY_NAME).unlink()
@@ -1925,6 +1942,8 @@ def install_optiscaler(opti_dir, dll, ini_src, keep_fsr4):
         backup = opti_dir / "OptiScaler.ini.helixsr-backup"
         if not backup.exists():
             shutil.copyfile(ini, backup)
+    for (s, k) in wanted:   # a setting the earlier install here didn't change (HLX FSR 4 leaves FfxDx12Path alone)
+        prev.setdefault(f"{s}/{k}", ini_get(text, s, k))
     for (s, k), v in wanted.items():
         text = ini_set(text, s, k, v)
     write_text(ini, text)
@@ -2973,12 +2992,18 @@ class Plugin:
             return uninstall_direct(self._checked_target(path), release_ini(active_dir()))
         return await self._do(work)
 
-    async def install_optiscaler(self, path, keep_fsr4, ignore_dx11=False, dlss=False):
-        """dlss: 3.0+'s HLX DLSS as OptiScaler's DLSS (NvngxPath, like 1.5) instead of HLX FSR 4 as its FSR."""
+    async def install_optiscaler(self, path, keep_fsr4, ignore_dx11=False, dlss=False, tag=None):
+        """dlss: 3.0+'s HLX DLSS as OptiScaler's DLSS (NvngxPath, like 1.5) instead of HLX FSR 4 as its FSR (no longer
+        offered in the panel: stock OptiScaler 0.10 never counts the Deck's GPU as DLSS-capable). tag: a downloaded
+        release with HelixSR's own network (2.0.0) instead of the selected one, next to a 3.x release."""
         def work():
             self._guard(path, True)
             if not ignore_dx11:   # "Install anyway": the user knows the game runs on DirectX 12
                 refuse_dx11(self._checked_opti(path))
+            if tag:
+                dll = own_network_dll(tag)
+                return install_optiscaler(self._checked_opti(path), dll, release_ini(version_dir(tag)),
+                                          bool(keep_fsr4))
             if dlss:
                 ngx = release_ngx_dll(active_dir())
                 if not ngx:

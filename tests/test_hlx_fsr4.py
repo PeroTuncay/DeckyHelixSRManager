@@ -351,3 +351,65 @@ class OptiHlxLogTest(FakeHomeTest):
         main.install_optiscaler(o, main.release_dll(d), main.release_ini(d), True)
         write(o / "OptiScaler.log", "[10:00:00.000] [I] OptiScaler started\n")
         self.assertFalse(main.opti_hlx_check(o)["exists"])
+
+
+def built_20(version="2.0.0"):
+    """A downloaded, built HelixSR 2.0 release: its own network in HelixSR-fsrfg/amd_fidelityfx_dx12.dll."""
+    d = HOME / f"HelixSR/v{version}"
+    dll = fake_dll(d / main.RELEASE_DLL_DIR / main.DLL_FFX, version, ["Int8", "Sharpener", "Sharpness"])
+    dll.write_bytes(dll.read_bytes() + b"W" * 8 + b"P" * 8 + main.EMBED_MAGIC + struct.pack("<QQQ", 8, 8, 1))
+    write(d / main.RELEASE_DLL_DIR / "helixsr.ini", "[Sharpening]\nSharpener = off\nSharpness = 0.5\n")
+    return d
+
+
+class OwnNetworkNextToHlxTest(FakeHomeTest):
+    """3.x selected: HelixSR's own (DLSS) network comes from 2.0.0 in the same OptiScaler section, since HLX DLSS
+    needs HelixSR Scaler (stock OptiScaler 0.10 never counts the Deck's GPU as DLSS-capable)."""
+
+    def setUp(self):
+        super().setUp()
+        release(built=True)
+        built_20()
+        main.save_settings({"helix_dir": str(HOME / "HelixSR"), "active": "v3.0.0"})
+        self.o = OptiScalerInstallTest.opti(self)
+        self._inside = main.inside_library
+        main.inside_library = lambda p: True
+
+    def tearDown(self):
+        main.inside_library = self._inside
+
+    def install(self, tag=None):
+        r = asyncio.run(main.Plugin().install_optiscaler(str(self.o), True, True, False, tag))
+        self.assertTrue(r["ok"], r)
+        return main.opti_state(self.o, self.o)
+
+    def test_from_hlx_fsr4_to_20_and_back(self):
+        self.assertEqual(self.install()["upscaler"], "HLX FSR 4")
+        st = self.install("v2.0.0")
+        self.assertEqual((st["helix_version"], st["upscaler"], st["installed_kind"]), ("2.0.0", None, "ffx"))
+        sub = self.o / main.OPTI_SUBDIR
+        text = (self.o / "OptiScaler.ini").read_text()
+        self.assertEqual(main.ini_get(text, "Libraries", "FfxDx12Path"), main.win_path(sub / main.DLL_FFX))
+        # AMD's FSR that HLX FSR 4 kept stays selectable after HelixSR 2.0.0
+        self.assertEqual(main.ini_get((sub / "helixsr.ini").read_text(), "Forwarding", "UpscalerDll"),
+                         main.FSR4_COPY_NAME)
+        self.assertEqual((sub / main.FSR4_COPY_NAME).read_bytes(), b"MZ AMD FSR 4 upscaler")
+        self.assertEqual(self.install()["upscaler"], "HLX FSR 4")
+        self.assertFalse((sub / main.DLL_FFX).exists())
+        main.uninstall_optiscaler(self.o)
+        self.assertEqual((self.o / "OptiScaler.ini").read_text(), OPTI_INI)
+
+    def test_removing_20_after_hlx_fsr4_restores_the_ini(self):
+        self.install()
+        self.install("v2.0.0")
+        main.uninstall_optiscaler(self.o)
+        self.assertEqual((self.o / "OptiScaler.ini").read_text(), OPTI_INI)
+
+    def test_only_a_built_release_with_its_own_network(self):
+        for tag in ("v3.0.0", "v1.9.9", "../x"):
+            r = asyncio.run(main.Plugin().install_optiscaler(str(self.o), True, True, False, tag))
+            self.assertFalse(r["ok"], tag)
+        fake_dll(HOME / "HelixSR/v2.0.0" / main.RELEASE_DLL_DIR / main.DLL_FFX, "2.0.0")   # not built
+        r = asyncio.run(main.Plugin().install_optiscaler(str(self.o), True, True, False, "v2.0.0"))
+        self.assertFalse(r["ok"])
+        self.assertIn("no network", r["error"])
