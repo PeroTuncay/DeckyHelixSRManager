@@ -328,3 +328,26 @@ class HlxDlssTest(FakeHomeTest):
                      ("Libraries", "NvngxPath")):
             self.assertEqual(main.ini_get(text, s, k), "auto", k)
         self.assertFalse((self.o / main.OPTI_SUBDIR).exists())
+
+
+class OptiHlxLogTest(FakeHomeTest):
+    """Inside OptiScaler, HLX FSR 4 logs to OptiScaler.log, not HLX_FSR.log; its start-up lines come early."""
+
+    def test_lines_found_in_optiscaler_log(self):
+        d = release(built=True)
+        o = OptiScalerInstallTest.opti(self)
+        main.install_optiscaler(o, main.release_dll(d), main.release_ini(d), True)
+        noise = "".join(f"[10:00:02.000] [D] frame {n}: FFX dispatch\n" for n in range(20000))
+        write(o / "OptiScaler.log",
+              "[10:00:00.000] [I] HLX-FSR-4 GPU: AMD Custom GPU 0405 (PCI 1002:1435)\n"
+              "[10:00:01.000] [I] HLX-FSR-4 own runtime active: wave32 (tier 2), output 1280x800, max render 1280x800, flags 0x1\n"
+              + noise)
+        c = main.opti_hlx_check(o)
+        self.assertEqual((c["status"], c["log"]), ("running", "OptiScaler.log"))
+
+    def test_nothing_logged(self):
+        d = release(built=True)
+        o = OptiScalerInstallTest.opti(self)
+        main.install_optiscaler(o, main.release_dll(d), main.release_ini(d), True)
+        write(o / "OptiScaler.log", "[10:00:00.000] [I] OptiScaler started\n")
+        self.assertFalse(main.opti_hlx_check(o)["exists"])

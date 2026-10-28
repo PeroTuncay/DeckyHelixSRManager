@@ -1287,10 +1287,25 @@ HLX_ERRORS = re.compile(r"shaders are not built yet|cannot run the own runtime|c
 HLX_FALLBACK = re.compile(r"AMD's original instead|using AMD provider|FSR \S+ requested: AMD's original")
 
 
-def hlx_log_check(log, info):
-    """HLX_FSR.log: "own runtime active" when HLX FSR 4 upscales; AMD's FSR takes over when its shaders aren't built,
-    the GPU can't run them or a request isn't covered (then the log says so)."""
-    lines = tail_lines(log)
+def hlx_log_lines(log, limit=400):
+    """HLX FSR 4's lines in OptiScaler.log: inside OptiScaler it logs there ("[I] HLX-FSR-4 ..."), not to HLX_FSR.log.
+    Read through the whole file: its start-up lines sit early in the session, before OptiScaler's per-frame lines."""
+    out = []
+    try:
+        with open(log, "rb") as f:
+            for raw in f:
+                if b"HLX-FSR-4" in raw or b"HLX FSR 4" in raw:
+                    out.append(raw.decode("utf-8", errors="replace").rstrip())
+                    del out[:-limit]
+    except OSError:
+        pass
+    return out
+
+
+def hlx_log_check(log, info, lines=None):
+    """HLX_FSR.log (or HLX FSR 4's lines from OptiScaler.log): "own runtime active" when HLX FSR 4 upscales; AMD's FSR
+    takes over when its shaders aren't built, the GPU can't run them or a request isn't covered (the log says so)."""
+    lines = tail_lines(log) if lines is None else lines
     text = "\n".join(lines)
     if HLX_ERRORS.search(text):
         status = "error"
@@ -1302,7 +1317,20 @@ def hlx_log_check(log, info):
         status = "loaded"
     hl = [l.strip() for l in lines if re.search(r"own runtime|GPU|create|AMD's original|not built|HLX FSR 4 \(", l)]
     return {"exists": True, "mtime": info["mtime"], "status": status, "highlights": hl[-12:], "tail": lines[-15:],
-            "last_upscale": None, "log": HLX_LOG}
+            "last_upscale": None, "log": Path(log).name}
+
+
+def opti_hlx_check(opti_dir):
+    """The check for HLX FSR 4 in a game's OptiScaler: HLX_FSR.log next to it if it wrote one, else its lines in
+    OptiScaler.log (OptiScaler writes that file only with LogToFile = true)."""
+    sub = Path(opti_dir) / OPTI_SUBDIR
+    check = helix_log_check(sub)
+    if check["exists"]:
+        return check
+    log = opti_log_path(opti_dir)
+    info = file_info(log)
+    lines = hlx_log_lines(log) if info else []
+    return hlx_log_check(log, info, lines) if lines else check
 
 
 def helix_log_check(folder):
@@ -1403,7 +1431,7 @@ def opti_log_check(opti_dir):
         return {"exists": False, "path": str(log), "lines": [], "not_nvidia": False}
     all_lines = tail_lines(log, 4000)
     lines = [l.strip() for l in all_lines
-             if re.search(r"helixsr|amd_fidelityfx|ffx.*upscaler|upscaler.*ffx|nvngx|dlss|not running on nvidia", l, re.I)]
+             if re.search(r"helixsr|hlx|amd_fidelityfx|ffx.*upscaler|upscaler.*ffx|nvngx|dlss|not running on nvidia", l, re.I)]
     # HelixSR 1.5+ needs the GPU to look like an NVIDIA one; OptiScaler says this when the launch option is missing
     not_nvidia = any("not running on nvidia" in l.lower() for l in all_lines)
     return {"exists": True, "path": str(log), "mtime": info["mtime"], "lines": lines[-15:], "not_nvidia": not_nvidia}
@@ -2810,7 +2838,7 @@ class Plugin:
                 for o in opti:
                     st = opti_state(o, folder)
                     sub = o / OPTI_SUBDIR
-                    st["check"] = helix_log_check(sub)
+                    st["check"] = opti_hlx_check(o) if st.get("upscaler") == HLX_NAME else helix_log_check(sub)
                     st["opti_log"] = opti_log_check(o)
                     st["ini"] = helix_ini_values(sub)
                     st["helix_folder"] = str(sub)

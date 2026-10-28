@@ -1763,8 +1763,10 @@ function gameStatus(game: GameDetail, active: Active): { color: string; title: s
       : `open "In place of the game's FSR 3.1" and press "Install HelixSR ${active.version} here"`;
     return { color: GREY, title: "HelixSR isn't installed in this game", detail: `To install it, ${where} below.` };
   }
-  // the install the game used last (newest log), else the first
-  const i = [...installs].sort((a, b) => (b.check.mtime ?? 0) - (a.check.mtime ?? 0))[0];
+  // the install the game used last (newest log), else the one with the selected release (not an older leftover), else
+  // the first
+  const current = (x: Install) => (active.version && x.version === active.version ? 1 : 0);
+  const i = [...installs].sort((a, b) => (b.check.mtime ?? 0) - (a.check.mtime ?? 0) || current(b) - current(a))[0];
   const v = i.version ? helixName(i.version, i.upscaler) : "HelixSR";
   const pick = SELECT_TEXT[i.how];
   const extra =
