@@ -245,7 +245,12 @@ type GameDetail = Result & {
 };
 
 // the current (running) or last game session, to tell whether a helixsr.log belongs to it
-type Session = { running: boolean; started: number | null; last_played: number | null };
+// last_played: Steam's LastPlayed, which it writes again when the game quits (the session's end);
+// last_started: the last session's start from Steam's gameprocess_log.txt, when it's still in there
+type Session = { running: boolean; started: number | null; last_played: number | null; last_started?: number | null };
+
+// When the last session began: its logged start, else LastPlayed (late by however long that session lasted)
+const lastSessionStart = (s: Session) => s.last_started ?? s.last_played;
 
 // Why installing / removing is blocked right now (the backend checks the same), or null
 type Guard = { install: string | null; remove: string | null };
@@ -1041,11 +1046,12 @@ function sessionNote(check: Check, session?: Session): { color: string; text: st
       ? { color: "#5ba32b", text: "The log is from the current game session." }
       : { color: "#e5a50a", text: "Nothing logged in the current session yet: HelixSR hasn't been asked to upscale (select it in the game / OptiScaler)." };
   }
-  if (!session.last_played) return null;
-  if (!check.mtime) return { color: "#8b929a", text: `HelixSR wasn't loaded in the last session (${date(session.last_played)}).` };
-  return check.mtime >= session.last_played - 60
-    ? { color: "#8b929a", text: `The log is from the last game session (${date(session.last_played)}).` }
-    : { color: "#e5a50a", text: `The log is older than the last game session (${date(session.last_played)}): HelixSR wasn't used then.` };
+  const since = lastSessionStart(session);
+  if (!since) return null;
+  if (!check.mtime) return { color: "#8b929a", text: `HelixSR wasn't loaded in the last session (${date(since)}).` };
+  return check.mtime >= since - 60
+    ? { color: "#8b929a", text: `The log is from the last game session (${date(since)}).` }
+    : { color: "#e5a50a", text: `The log is older than the last game session (${date(since)}): HelixSR wasn't used then.` };
 }
 
 function CheckBlock({ check, ini, session, details }: { check: Check; ini: IniValues; session?: Session; details: boolean }) {
@@ -1729,7 +1735,8 @@ function optiSummary(items: OptiTarget[]) {
 // Whether a helixsr.log belongs to the current/last game session ("unknown" without session data).
 function freshness(check: Check, session: Session): "current" | "last" | "stale" | "unknown" {
   if (session.running && session.started) return check.mtime && check.mtime >= session.started ? "current" : "stale";
-  if (!session.running && session.last_played) return check.mtime && check.mtime >= session.last_played - 60 ? "last" : "stale";
+  const since = lastSessionStart(session);
+  if (!session.running && since) return check.mtime && check.mtime >= since - 60 ? "last" : "stale";
   return "unknown";
 }
 

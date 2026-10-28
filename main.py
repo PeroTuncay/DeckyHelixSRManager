@@ -981,7 +981,8 @@ def process_started(p):
 
 
 def last_played(appid):
-    """When Steam last started this game (localconfig.vdf, LastPlayed), or None."""
+    """localconfig.vdf's LastPlayed for this game, or None. Steam writes it again when the game quits, so after a
+    session it's the end of that session, not its start (last_session_start has the start)."""
     best, seen = None, set()
     for root in steam_roots():
         try:
@@ -1000,6 +1001,44 @@ def last_played(appid):
                 n = re.search(r'"LastPlayed"\s*"(\d+)"', m.group(1))
                 if n:
                     best = max(best or 0, int(n.group(1)))
+    return best
+
+
+GAMEPROCESS_TAIL = 2 << 20   # the end of Steam's gameprocess_log.txt that is read (it grows to megabytes)
+
+
+def last_session_start(appid):
+    """When Steam started this game's last (or current) session, or None: the first "AppID <id> adding PID" line after
+    its last "Remove <id> from running list" in Steam's logs/gameprocess_log.txt (local time). Only its end is read."""
+    best = None
+    add = re.compile(r"^\[(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d)\] AppID %s adding PID " % re.escape(str(appid)))
+    removed = "] Remove %s from running list" % appid
+    logs = set()
+    for root in steam_roots():
+        try:
+            logs.add((root / "logs/gameprocess_log.txt").resolve())
+        except (OSError, RuntimeError):
+            continue
+    for log in logs:
+        try:
+            with open(log, "rb") as f:
+                size = f.seek(0, os.SEEK_END)
+                f.seek(max(0, size - GAMEPROCESS_TAIL))
+                lines = f.read().decode("utf-8", "replace").splitlines()[1 if size > GAMEPROCESS_TAIL else 0:]
+        except OSError:
+            continue
+        start = None
+        for line in lines:
+            if removed in line:
+                start = None
+                continue
+            m = add.match(line)
+            if m and start is None:
+                try:
+                    start = time.mktime(time.strptime(m.group(1), "%Y-%m-%d %H:%M:%S"))
+                except (ValueError, OverflowError):
+                    continue
+                best = max(best or 0, start)
     return best
 
 
@@ -2858,7 +2897,8 @@ class Plugin:
                         "steam_busy": steam_busy(g),
                         # when the current (running) or last game session started, to judge how fresh a log is
                         "session": {"running": bool(procs), "started": min(starts) if starts else None,
-                                    "last_played": game_last_played(g)},
+                                    "last_played": game_last_played(g),
+                                    "last_started": last_session_start(g["appid"]) if steam_appid(g) else None},
                         "anticheat": anticheat, "anticheat_ack": bool(acks.get(str(g["appid"])))}
             return await asyncio.to_thread(work)
         except Exception as e:

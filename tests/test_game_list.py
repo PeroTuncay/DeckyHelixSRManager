@@ -1,6 +1,7 @@
 """What the game list shows: games HelixSR can use (FSR 3.1, OptiScaler) and games that only need OptiScaler first
 (DLSS, XeSS, FSR 2), with a plain hint instead of being hidden. Run: npm test."""
 import asyncio
+import time
 
 from support import HOME, FakeHomeTest, game, main, pe_exe, write
 
@@ -51,3 +52,43 @@ class UpscalerInputsTest(FakeHomeTest):
         exe = pe_exe(HOME / "x/Game.exe", ["kernel32.dll", "d3d11.dll"])
         self.assertEqual(main.pe_imports(exe), {"kernel32.dll", "d3d11.dll"})
         self.assertEqual(main.exe_dx(exe), "dx11")
+
+
+class LastSessionStartTest(FakeHomeTest):
+    """Steam's LastPlayed is written again when a game quits; the session's start comes from gameprocess_log.txt."""
+
+    LOG = HOME / ".local/share/Steam/logs/gameprocess_log.txt"
+
+    @staticmethod
+    def at(stamp):
+        return time.mktime(time.strptime(stamp, "%Y-%m-%d %H:%M:%S"))
+
+    def test_first_process_of_the_last_session(self):
+        write(self.LOG, "\n".join([
+            "[2026-10-28 14:20:00] AppID 292030 adding PID 100 as a tracked process \"x\"",
+            "[2026-10-28 14:28:24] Remove 292030 from running list",
+            "[2026-10-28 14:41:03] AppID 292030 adding PID 8860 as a tracked process \"x\"",
+            "[2026-10-28 14:41:09] AppID 292030 adding PID 9046 as a tracked process",
+            "[2026-10-28 14:42:00] AppID 2920300 adding PID 9100 as a tracked process",
+            "[2026-10-28 14:46:21] AppID 292030 no longer tracking PID 8860, exit code 0",
+            "[2026-10-28 14:46:21] Remove 292030 from running list",
+            "[2026-10-28 14:50:00] Remove 2920300 from running list", ""]))
+        self.assertEqual(main.last_session_start(292030), self.at("2026-10-28 14:41:03"))
+        self.assertEqual(main.last_session_start("2920300"), self.at("2026-10-28 14:42:00"))
+
+    def test_a_running_session_and_no_log(self):
+        self.assertIsNone(main.last_session_start(292030))
+        write(self.LOG, "[2026-10-28 15:00:00] AppID 292030 adding PID 1 as a tracked process\n")
+        self.assertEqual(main.last_session_start(292030), self.at("2026-10-28 15:00:00"))
+        self.assertIsNone(main.last_session_start(1))
+
+    def test_only_the_end_of_a_big_log_is_read(self):
+        old = main.GAMEPROCESS_TAIL
+        main.GAMEPROCESS_TAIL = 100
+        try:
+            write(self.LOG, "[2026-10-01 10:00:00] AppID 7 adding PID 1 as a tracked process\n" + "x" * 200 + "\n"
+                  "[2026-10-02 10:00:00] AppID 8 adding PID 2 as a tracked process\n")
+            self.assertIsNone(main.last_session_start(7))
+            self.assertEqual(main.last_session_start(8), self.at("2026-10-02 10:00:00"))
+        finally:
+            main.GAMEPROCESS_TAIL = old
