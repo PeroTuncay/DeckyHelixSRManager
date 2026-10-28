@@ -1329,7 +1329,9 @@ function DirectSection({
 
 // --- Steam launch options (HelixSR 1.5+ needs the GPU to look like an NVIDIA one) --------------------------------------
 
-const NGX_LAUNCH_VARS = "PROTON_FORCE_NVAPI=1 DXVK_NVAPI_GPU_ARCH=AD100";
+// DXVK_NVAPI_ALLOW_OTHER_DRIVERS: dxvk-nvapi only initializes on an AMD GPU with it; OptiScaler 0.10 needs that to
+// count the GPU as DLSS-capable (otherwise its DLSS backend silently falls back to FSR 2.1.2)
+const NGX_LAUNCH_VARS = "PROTON_FORCE_NVAPI=1 DXVK_NVAPI_GPU_ARCH=AD100 DXVK_NVAPI_ALLOW_OTHER_DRIVERS=1";
 
 function readLaunchOptions(appId: number): Promise<string | null> {
   return new Promise((resolve) => {
@@ -1350,9 +1352,15 @@ function readLaunchOptions(appId: number): Promise<string | null> {
   });
 }
 
-const hasNgxVars = (o: string) => /\bPROTON_FORCE_NVAPI=1\b/.test(o) && /\bDXVK_NVAPI_GPU_ARCH=\S+/.test(o);
+// all three, so an option set by an older version of the plugin (without ALLOW_OTHER_DRIVERS) is offered again
+const hasNgxVars = (o: string) =>
+  /\bPROTON_FORCE_NVAPI=1\b/.test(o) && /\bDXVK_NVAPI_GPU_ARCH=\S+/.test(o) && /\bDXVK_NVAPI_ALLOW_OTHER_DRIVERS=1\b/.test(o);
 const stripNgxVars = (o: string) =>
-  o.replace(/\bPROTON_FORCE_NVAPI=\S*\s*/g, "").replace(/\bDXVK_NVAPI_GPU_ARCH=\S*\s*/g, "").trim();
+  o
+    .replace(/\bPROTON_FORCE_NVAPI=\S*\s*/g, "")
+    .replace(/\bDXVK_NVAPI_GPU_ARCH=\S*\s*/g, "")
+    .replace(/\bDXVK_NVAPI_ALLOW_OTHER_DRIVERS=\S*\s*/g, "")
+    .trim();
 
 // The variables go first; whatever was there (e.g. Decky Framegen's "~/fgmod/fgmod %command%") stays after them.
 function withNgxVars(o: string) {

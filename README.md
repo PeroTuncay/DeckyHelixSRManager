@@ -120,8 +120,11 @@ your account banned and only installs after you turn on **I understand the risk*
   HelixSR … here**, then select AMD FSR as the upscaler in the game's settings. This needs no OptiScaler. A game that
   offers both sections works either way (HelixSR 1.8's own setup prefers this one).
 - **HelixSR 1.5.x (withdrawn upstream; only if you still have it):** in the **OptiScaler** section press **Install HelixSR
-  … via OptiScaler (as DLSS)**, then **Add launch option**: it adds `PROTON_FORCE_NVAPI=1 DXVK_NVAPI_GPU_ARCH=AD100` in
-  front of the game's existing launch options (e.g. Decky Framegen's stay as they are). In the game, select **DLSS**.
+  … via OptiScaler (as DLSS)**, then **Add launch option**: it adds
+  `PROTON_FORCE_NVAPI=1 DXVK_NVAPI_GPU_ARCH=AD100 DXVK_NVAPI_ALLOW_OTHER_DRIVERS=1` in front of the game's existing
+  launch options (e.g. Decky Framegen's stay as they are). In the game, select **DLSS**. The last variable lets NVIDIA's
+  API layer start on the Deck's AMD GPU; without it, OptiScaler 0.10 decides the GPU can't do DLSS and quietly uses
+  FSR 2.1.2 instead (an option added by an older version of the plugin is offered again).
 
 Switching a game between releases is one button; the plugin undoes the other setup first. Under the OptiScaler section
 the plugin also points out settings that commonly get in the way (DLSS input off, GPU spoofing off, an overlay setting

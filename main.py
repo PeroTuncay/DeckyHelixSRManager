@@ -56,7 +56,9 @@ OPTI_MARKER = "helixsr-decky-optiscaler.json"  # ours, inside the HelixSR folder
 DLL_FFX = "amd_fidelityfx_dx12.dll"   # HelixSR up to 1.4: an FSR 3.1 replacement
 DLL_NGX = "nvngx.dll"                 # HelixSR 1.5+: a DLSS (NGX) replacement, OptiScaler only
 NGX_MARKER = "helixsr-install.json"   # in the HelixSR folder next to OptiScaler.ini: {"helixsr", "previous"}
-NGX_LAUNCH_VARS = "PROTON_FORCE_NVAPI=1 DXVK_NVAPI_GPU_ARCH=AD100"
+# DXVK_NVAPI_ALLOW_OTHER_DRIVERS: without it dxvk-nvapi doesn't initialize on an AMD GPU, and OptiScaler 0.10 (which
+# asks the system's nvapi64.dll whether the GPU can do DLSS) never uses its DLSS backend: it falls back to FSR 2.1.2
+NGX_LAUNCH_VARS = "PROTON_FORCE_NVAPI=1 DXVK_NVAPI_GPU_ARCH=AD100 DXVK_NVAPI_ALLOW_OTHER_DRIVERS=1"
 # file or folder names that mean a game ships kernel/online anti-cheat: swapping its DLLs can get an account banned
 ANTICHEAT = ("easyanticheat", "battleye", "beclient", "equ8", "faceit", "vanguard", "start_protected_game",
              "anticheatexpert", "xigncode", "nprotect", "gameguard")
