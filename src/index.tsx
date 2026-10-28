@@ -31,6 +31,7 @@ type LocalVersion = {
   kind: ReleaseKind;
   upscaler: string | null; // "HLX FSR 4": 3.0+ puts HLX FSR 4 into games, not HelixSR's own network
   built: boolean;
+  dlss_built: boolean; // 3.0+: HLX DLSS built too
   setup_script: boolean;
   verified?: boolean; // the download matched GitHub's SHA256
   replaced_upstream?: boolean; // the zip on GitHub changed since it was downloaded
@@ -57,6 +58,7 @@ type HelixState = {
   setup: SetupStatus;
   kind: ReleaseKind | null;
   upscaler: string | null;
+  dlss_built: boolean;
 };
 
 type SetupStatus = {
@@ -148,7 +150,14 @@ type OptiTarget = {
   helix_folder: string;
 };
 
-type Active = { ready: boolean; tag: string | null; version: string | null; kind: ReleaseKind | null; upscaler: string | null };
+type Active = {
+  ready: boolean;
+  tag: string | null;
+  version: string | null;
+  kind: ReleaseKind | null;
+  upscaler: string | null;
+  dlss_built: boolean; // 3.0+: HLX DLSS built (for OptiScaler's DLSS)
+};
 
 // "HelixSR 3.0.0 (HLX FSR 4)": from 3.0 games get HLX FSR 4 rather than HelixSR's own network
 function helixName(version: string | null | undefined, upscaler?: string | null) {
@@ -292,7 +301,7 @@ const getStores = callable<[], StoreInfo[]>("get_stores");
 const setStore = callable<[id: string, enabled: boolean], Result>("set_store");
 const installDirect = callable<[path: string, ignoreDx11?: boolean], Result>("install_direct");
 const uninstallDirect = callable<[path: string], Result>("uninstall_direct");
-const installOptiscaler = callable<[path: string, keepFsr4: boolean, ignoreDx11?: boolean], Result>("install_optiscaler");
+const installOptiscaler = callable<[path: string, keepFsr4: boolean, ignoreDx11?: boolean, dlss?: boolean], Result>("install_optiscaler");
 const uninstallOptiscaler = callable<[path: string], Result>("uninstall_optiscaler");
 const setOptiLogging = callable<[path: string, on: boolean], Result>("set_opti_logging");
 const setHelixOption = callable<[folder: string, option: string, value: string], Result>("set_helix_option");
@@ -1457,6 +1466,9 @@ function OptiItem({
 
   const ngxActive = active.kind === "ngx";
   const installed = o.installed_kind;
+  // 3.0+ releases: HLX FSR 4 (OptiScaler's FSR) or HLX DLSS (OptiScaler's DLSS, the "ngx" kind of install)
+  const hlxRelease = !!active.upscaler;
+  const hlxDlss = hlxRelease && installed === "ngx";
   const scaler = installed === "scaler"; // HelixSR Scaler from HelixSR Desktop: shown and checked, not managed
   const official = installed === "official" || scaler;
   const differs = installed !== null && !!active.version && o.helix_version !== active.version;
@@ -1477,7 +1489,7 @@ function OptiItem({
             ? `${helixName(o.helix_version, o.upscaler)} disabled: OptiScaler uses its previous upscaler`
             : o.configured
             ? installed === "ngx"
-              ? `Uses HelixSR ${o.helix_version ?? ""} as DLSS`
+              ? `Uses ${helixName(o.helix_version, o.upscaler)} as DLSS`
               : o.upscaler
               ? `Uses ${helixName(o.helix_version, o.upscaler)} as its FSR upscaler${o.kept_fsr4 ? " (AMD's FSR selectable after it)" : ""}`
               : `Uses HelixSR ${o.helix_version ?? ""}${o.kept_fsr4 ? " (FSR 4 selectable next to it)" : ""}`
@@ -1535,12 +1547,38 @@ function OptiItem({
           disabled={!active.ready || busy || !!guard.install}
           onInstall={() => run(() => installOptiscaler(o.dir, !!o.current_sr_dll, true))}
         />
+      ) : !o.configured && hlxRelease && !installed ? (
+        <>
+          <Note>
+            HelixSR {active.version} has two upscalers for OptiScaler. HLX DLSS is HelixSR's DLSS network (experimental
+            here: HelixSR makes it for HelixSR Scaler; needs the launch option below). HLX FSR 4 is AMD's FSR 4 network
+            on HelixSR's pipeline. Either way, select DLSS in the game.
+          </Note>
+          <PanelSectionRow>
+            <ButtonItem
+              layout="below"
+              disabled={!active.ready || !active.dlss_built || busy || !!guard.install}
+              onClick={() => run(() => installOptiscaler(o.dir, false, false, true))}
+            >
+              {active.dlss_built ? `Install HLX DLSS ${active.version} via OptiScaler (experimental)` : "HLX DLSS isn't built yet"}
+            </ButtonItem>
+          </PanelSectionRow>
+          <PanelSectionRow>
+            <ButtonItem
+              layout="below"
+              disabled={!active.ready || busy || !!guard.install}
+              onClick={() => run(() => installOptiscaler(o.dir, true))}
+            >
+              {active.ready ? `Install HLX FSR 4 ${active.version} via OptiScaler` : notReady(active)}
+            </ButtonItem>
+          </PanelSectionRow>
+        </>
       ) : !o.configured ? (
         <PanelSectionRow>
           <ButtonItem
             layout="below"
             disabled={!active.ready || busy || !!guard.install}
-            onClick={() => run(() => installOptiscaler(o.dir, keepFsr4 && !!o.current_sr_dll))}
+            onClick={() => run(() => installOptiscaler(o.dir, keepFsr4 && !!o.current_sr_dll, false, hlxDlss))}
           >
             {active.ready
               ? installed
@@ -1550,14 +1588,25 @@ function OptiItem({
           </ButtonItem>
         </PanelSectionRow>
       ) : (
-        active.ready &&
-        differs && (
-          <PanelSectionRow>
-            <ButtonItem layout="below" disabled={busy || !!guard.install} onClick={() => run(() => installOptiscaler(o.dir, o.kept_fsr4))}>
-              Switch to HelixSR {active.version}
-              {ngxActive && installed === "ffx" ? " (as DLSS)" : ""}
-            </ButtonItem>
-          </PanelSectionRow>
+        active.ready && (
+          <>
+            {differs && (
+              <PanelSectionRow>
+                <ButtonItem layout="below" disabled={busy || !!guard.install} onClick={() => run(() => installOptiscaler(o.dir, o.kept_fsr4, false, hlxDlss))}>
+                  Switch to {hlxRelease ? helixName(active.version, hlxDlss ? "HLX DLSS" : "HLX FSR 4") : `HelixSR ${active.version}`}
+                  {ngxActive && installed === "ffx" ? " (as DLSS)" : ""}
+                </ButtonItem>
+              </PanelSectionRow>
+            )}
+            {/* 3.0+: the other of HelixSR's two upscalers, in place of this one */}
+            {hlxRelease && !official && !o.disabled && (hlxDlss || active.dlss_built) && (
+              <PanelSectionRow>
+                <ButtonItem layout="below" disabled={busy || !!guard.install} onClick={() => run(() => installOptiscaler(o.dir, true, false, !hlxDlss))}>
+                  {hlxDlss ? `Use HLX FSR 4 ${active.version} instead` : `Use HLX DLSS ${active.version} instead (experimental)`}
+                </ButtonItem>
+              </PanelSectionRow>
+            )}
+          </>
         )
       )}
       {o.configured && !official && !o.disabled && (
@@ -1623,7 +1672,7 @@ function OptiItem({
               </div>
             </PanelSectionRow>
           )}
-          {!scaler && !o.upscaler && (
+          {!scaler && o.upscaler !== "HLX FSR 4" && (
             <IniControls
               folder={o.helix_folder}
               ini={o.ini}
@@ -2200,6 +2249,7 @@ function Content() {
             version: helix?.version ?? null,
             kind: helix?.kind ?? null,
             upscaler: helix?.upscaler ?? null,
+            dlss_built: helix?.dlss_built ?? false,
           }}
           onRemoved={scan}
         />

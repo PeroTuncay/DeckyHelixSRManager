@@ -256,3 +256,75 @@ class SetupWrapper300Test(FakeHomeTest):
         st = main.setup_status()
         self.assertEqual(st["errors"], [])
         self.assertEqual(st["phase"], "Finished")
+
+
+def built_ngx(path, version="3.1.0"):
+    """A stand-in HLX DLSS (HelixSR/helixsr.dll) with the network the setup appends (weights, pak, footer)."""
+    dll = fake_dll(path, version, ["Int8", "Sharpener", "Sharpness", "WaveSize"])
+    dll.write_bytes(dll.read_bytes() + b"W" * 8 + b"P" * 8 + main.EMBED_MAGIC + struct.pack("<QQQ", 8, 8, 1))
+    return dll
+
+
+class HlxDlssTest(FakeHomeTest):
+    """3.0+: HLX DLSS (HelixSR's DLSS network, made for HelixSR Scaler) in the game's own OptiScaler as its DLSS
+    (NvngxPath, as 1.5's nvngx.dll), next to HLX FSR 4 as its FSR; either can replace the other."""
+
+    def setUp(self):
+        super().setUp()
+        self.rel = release(built=True)
+        built_ngx(self.rel / main.RELEASE_NGX_DLL)
+        main.save_settings({"helix_dir": str(HOME / "HelixSR"), "active": "v3.0.0"})
+        self.o = OptiScalerInstallTest.opti(self)
+        self._inside = main.inside_library
+        main.inside_library = lambda p: True
+
+    def tearDown(self):
+        main.inside_library = self._inside
+
+    def install(self, dlss):
+        r = asyncio.run(main.Plugin().install_optiscaler(str(self.o), True, True, dlss))
+        self.assertTrue(r["ok"], r)
+        return r["message"]
+
+    def test_release_offers_hlx_dlss(self):
+        self.assertEqual(main.release_ngx_dll(self.rel), self.rel / main.RELEASE_NGX_DLL)
+        self.assertEqual(main.upscaler_name(self.rel / main.RELEASE_NGX_DLL), "HLX DLSS")
+        self.assertEqual(main.release_ini(self.rel), self.rel / "HelixSR/helixsr.ini")
+        v = next(v for v in main.local_versions() if v["tag"] == "v3.0.0")
+        self.assertTrue(v["dlss_built"])
+        self.assertTrue(main.helix_state()["dlss_built"])
+
+    def test_not_built_is_refused(self):
+        fake_dll(self.rel / main.RELEASE_NGX_DLL, "3.1.0")
+        r = asyncio.run(main.Plugin().install_optiscaler(str(self.o), True, True, True))
+        self.assertFalse(r["ok"])
+        self.assertIn("isn't built", r["error"])
+
+    def test_install_as_optiscalers_dlss_with_settings(self):
+        self.assertIn("as DLSS", self.install(True))
+        sub = self.o / main.OPTI_SUBDIR
+        text = (self.o / "OptiScaler.ini").read_text()
+        self.assertEqual(main.ini_get(text, "Upscalers", "Dx12Upscaler"), "dlss")
+        self.assertEqual(main.ini_get(text, "Libraries", "NvngxPath"), main.win_path(sub / "nvngx.dll"))
+        st = main.opti_state(self.o, self.o)
+        self.assertEqual((st["installed_kind"], st["configured"], st["upscaler"], st["helix_version"]),
+                         ("ngx", True, "HLX DLSS", "3.1.0"))
+        self.assertTrue(main.helix_ini_values(sub)["int8_supported"])   # HLX DLSS reads helixsr.ini
+
+    def test_switch_between_both_and_remove(self):
+        self.install(True)
+        self.install(False)   # HLX FSR 4 in place of HLX DLSS
+        st = main.opti_state(self.o, self.o)
+        self.assertEqual((st["installed_kind"], st["upscaler"]), ("ffx", "HLX FSR 4"))
+        self.assertFalse((self.o / main.OPTI_SUBDIR / "nvngx.dll").exists())
+        text = (self.o / "OptiScaler.ini").read_text()
+        self.assertEqual(main.ini_get(text, "Libraries", "NvngxPath"), "auto")
+        self.install(True)    # and back
+        self.assertEqual(main.opti_state(self.o, self.o)["upscaler"], "HLX DLSS")
+        self.assertFalse((self.o / main.OPTI_SUBDIR / "amd_fidelityfx_upscaler_dx12.dll").exists())
+        main.uninstall_optiscaler(self.o)
+        text = (self.o / "OptiScaler.ini").read_text()   # (1.5's route writes NvngxPath = auto, OptiScaler's default)
+        for s, k in (("Upscalers", "Dx12Upscaler"), ("Libraries", "FfxDx12Path"), ("Libraries", "FfxDx12SRPath"),
+                     ("Libraries", "NvngxPath")):
+            self.assertEqual(main.ini_get(text, s, k), "auto", k)
+        self.assertFalse((self.o / main.OPTI_SUBDIR).exists())

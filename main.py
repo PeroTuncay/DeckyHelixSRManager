@@ -117,12 +117,15 @@ def version_dir(tag):
 
 RELEASE_DLL_DIR = "HelixSR-fsrfg"   # 2.0: the DLL (and its helixsr.ini) sit in this folder of the release
 # 3.0+: the FSR drop-in is HLX FSR 4 (AMD's FSR 4 network on HelixSR's pipeline), HLX-FSR4/amd_fidelityfx_upscaler_dx12.dll.
-# HelixSR/helixsr.dll next to it is HLX DLSS, HelixSR Scaler's DLSS upscaler, which the plugin doesn't install.
+# HelixSR/helixsr.dll next to it is HLX DLSS (HelixSR's DLSS network as an NGX DLL), HelixSR Scaler's DLSS upscaler; the
+# plugin puts it into the game's own OptiScaler the way it did 1.5's nvngx.dll (NvngxPath, experimental).
 HLX_DIR = "HLX-FSR4"
 HLX_MARK = b"HLX FSR 4 ("        # in HLX FSR 4's DLL: "HLX FSR 4 (4.1.2)"
 HLX_DATA_MAGIC = b"HLXFSR4D"     # the setup appends HLX FSR 4's shaders (built from AMD's file) behind this tag
 HLX_LOG = "HLX_FSR.log"          # HLX FSR 4's log, next to its DLL
 HLX_NAME = "HLX FSR 4"
+HLX_DLSS_NAME = "HLX DLSS"
+RELEASE_NGX_DLL = "HelixSR/helixsr.dll"
 
 
 def release_dll(d):
@@ -139,13 +142,20 @@ def release_version(d):
     HelixSR/helixsr.dll next to it."""
     dll = release_dll(d)
     if dll and is_hlx(dll):
-        return helix_version(Path(d) / "HelixSR" / "helixsr.dll")
+        return helix_version(Path(d) / RELEASE_NGX_DLL)
     return helix_version(dll) if dll else None
 
 
+def release_ngx_dll(d):
+    """3.0+: HLX DLSS (HelixSR/helixsr.dll) in a release that has HLX FSR 4, or None."""
+    p = Path(d) / RELEASE_NGX_DLL
+    return p if (Path(d) / HLX_DIR).is_dir() and p.exists() and is_helixsr(p) else None
+
+
 def release_ini(d):
-    """The helixsr.ini a release ships: next to its DLL (HelixSR-fsrfg from 2.0), else in its top folder."""
-    dll = release_dll(d)
+    """The helixsr.ini a release ships: next to its DLL (HelixSR-fsrfg from 2.0; HelixSR/, for HLX DLSS, from 3.0),
+    else in its top folder. HLX FSR 4 has none."""
+    dll = release_ngx_dll(d) or release_dll(d)
     if dll and (dll.parent / "helixsr.ini").exists():
         return dll.parent / "helixsr.ini"
     return Path(d) / "helixsr.ini"
@@ -187,6 +197,8 @@ def local_versions():
             out.append({"tag": tag, "dir": str(d), "version": version, "kind": dll_kind(dll),
                         "upscaler": upscaler_name(dll),
                         "built": has_network(dll), "setup_script": (d / "helixsr-setup.sh").exists(),
+                        # 3.0+: HLX DLSS built (the setup builds it before HLX FSR 4, so it can be ready alone)
+                        "dlss_built": bool(release_ngx_dll(d)) and has_network(release_ngx_dll(d)),
                         "verified": bool(meta.get("verified")),
                         # the zip on GitHub is no longer the one downloaded (re-uploaded under the same version)
                         "replaced_upstream": bool(now and meta.get("sha256") and now != meta["sha256"])})
@@ -282,8 +294,15 @@ def helix_version(path):
 
 
 def upscaler_name(path):
-    """What a HelixSR DLL is, for the panel: "HLX FSR 4" or None (HelixSR's own network)."""
-    return HLX_NAME if path and is_hlx(path) else None
+    """What a HelixSR DLL is, for the panel: "HLX FSR 4", "HLX DLSS" (3.0+'s NGX DLL, as nvngx.dll in an install) or
+    None (HelixSR's own network up to 2.0)."""
+    if not path:
+        return None
+    if is_hlx(path):
+        return HLX_NAME
+    if Path(path).name.lower() in (DLL_NGX, "helixsr.dll") and version_key(helix_version(path)) >= (3,):
+        return HLX_DLSS_NAME
+    return None
 
 
 def has_network(path):
@@ -1144,7 +1163,8 @@ def helix_state():
             "dir": cur["dir"] if cur else (str(version_dir(tag)) if tag else None),
             "downloaded": cur is not None, "version": cur["version"] if cur else None,
             "built": bool(cur and cur["built"]), "setup_script": bool(cur and cur["setup_script"]),
-            "kind": cur["kind"] if cur else None, "upscaler": cur["upscaler"] if cur else None}
+            "kind": cur["kind"] if cur else None, "upscaler": cur["upscaler"] if cur else None,
+            "dlss_built": bool(cur and cur["dlss_built"])}
 
 
 def built_dll():
@@ -2883,11 +2903,19 @@ class Plugin:
             return uninstall_direct(self._checked_target(path), release_ini(active_dir()))
         return await self._do(work)
 
-    async def install_optiscaler(self, path, keep_fsr4, ignore_dx11=False):
+    async def install_optiscaler(self, path, keep_fsr4, ignore_dx11=False, dlss=False):
+        """dlss: 3.0+'s HLX DLSS as OptiScaler's DLSS (NvngxPath, like 1.5) instead of HLX FSR 4 as its FSR."""
         def work():
             self._guard(path, True)
             if not ignore_dx11:   # "Install anyway": the user knows the game runs on DirectX 12
                 refuse_dx11(self._checked_opti(path))
+            if dlss:
+                ngx = release_ngx_dll(active_dir())
+                if not ngx:
+                    raise RuntimeError(f"HelixSR {active_tag()} has no {HLX_DLSS_NAME}.")
+                if not has_network(ngx):
+                    raise RuntimeError(f"{HLX_DLSS_NAME} isn't built yet. Run the setup first.")
+                return install_optiscaler_ngx(self._checked_opti(path), ngx)
             return install_optiscaler(self._checked_opti(path), built_dll(), release_ini(active_dir()),
                                       bool(keep_fsr4))
         return await self._do(work)
