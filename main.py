@@ -56,7 +56,9 @@ OPTI_MARKER = "helixsr-decky-optiscaler.json"  # ours, inside the HelixSR folder
 DLL_FFX = "amd_fidelityfx_dx12.dll"   # HelixSR up to 1.4: an FSR 3.1 replacement
 DLL_NGX = "nvngx.dll"                 # HelixSR 1.5+: a DLSS (NGX) replacement, OptiScaler only
 NGX_MARKER = "helixsr-install.json"   # in the HelixSR folder next to OptiScaler.ini: {"helixsr", "previous"}
-NGX_LAUNCH_VARS = "PROTON_FORCE_NVAPI=1 DXVK_NVAPI_GPU_ARCH=AD100"
+# DXVK_NVAPI_ALLOW_OTHER_DRIVERS: without it dxvk-nvapi doesn't initialize on an AMD GPU, and OptiScaler 0.10 (which
+# asks the system's nvapi64.dll whether the GPU can do DLSS) never uses its DLSS backend: it falls back to FSR 2.1.2
+NGX_LAUNCH_VARS = "PROTON_FORCE_NVAPI=1 DXVK_NVAPI_GPU_ARCH=AD100 DXVK_NVAPI_ALLOW_OTHER_DRIVERS=1"
 # file or folder names that mean a game ships kernel/online anti-cheat: swapping its DLLs can get an account banned
 ANTICHEAT = ("easyanticheat", "battleye", "beclient", "equ8", "faceit", "vanguard", "start_protected_game",
              "anticheatexpert", "xigncode", "nprotect", "gameguard")
@@ -115,21 +117,47 @@ def version_dir(tag):
     return base_dir() if tag == LEGACY_TAG else base_dir() / tag
 
 
-RELEASE_DLL_DIR = "HelixSR-fsrfg"   # 2.0+: the DLL (and its helixsr.ini) sit in this folder of the release
+RELEASE_DLL_DIR = "HelixSR-fsrfg"   # 2.0: the DLL (and its helixsr.ini) sit in this folder of the release
+# 3.0+: the FSR drop-in is HLX FSR 4 (AMD's FSR 4 network on HelixSR's pipeline), HLX-FSR4/amd_fidelityfx_upscaler_dx12.dll.
+# HelixSR/helixsr.dll next to it is HLX DLSS (HelixSR's DLSS network as an NGX DLL), HelixSR Scaler's DLSS upscaler; the
+# plugin puts it into the game's own OptiScaler the way it did 1.5's nvngx.dll (NvngxPath, experimental).
+HLX_DIR = "HLX-FSR4"
+HLX_MARK = b"HLX FSR 4 ("        # in HLX FSR 4's DLL: "HLX FSR 4 (4.1.2)"
+HLX_DATA_MAGIC = b"HLXFSR4D"     # the setup appends HLX FSR 4's shaders (built from AMD's file) behind this tag
+HLX_LOG = "HLX_FSR.log"          # HLX FSR 4's log, next to its DLL
+HLX_NAME = "HLX FSR 4"
+HLX_DLSS_NAME = "HLX DLSS"
+RELEASE_NGX_DLL = "HelixSR/helixsr.dll"
 
 
 def release_dll(d):
-    """The HelixSR DLL in a release folder: nvngx.dll (1.5-1.6), amd_fidelityfx_dx12.dll (up to 1.4, 1.7-1.9) or
-    HelixSR-fsrfg/amd_fidelityfx_dx12.dll (2.0+), or None."""
-    for p in (Path(d) / DLL_NGX, Path(d) / DLL_FFX, Path(d) / RELEASE_DLL_DIR / DLL_FFX):
+    """The DLL a release puts into games: nvngx.dll (1.5-1.6), amd_fidelityfx_dx12.dll (up to 1.4, 1.7-1.9),
+    HelixSR-fsrfg/amd_fidelityfx_dx12.dll (2.0) or HLX-FSR4/amd_fidelityfx_upscaler_dx12.dll (3.0+), or None."""
+    for p in (Path(d) / HLX_DIR / NAMES[0], Path(d) / DLL_NGX, Path(d) / DLL_FFX, Path(d) / RELEASE_DLL_DIR / DLL_FFX):
         if p.exists() and is_helixsr(p):
             return p
     return None
 
 
-def release_ini(d):
-    """The helixsr.ini a release ships: next to its DLL (HelixSR-fsrfg from 2.0), else in its top folder."""
+def release_version(d):
+    """HelixSR's version of a release folder. HLX FSR 4 names only its own version (4.1.2); HelixSR's is in
+    HelixSR/helixsr.dll next to it."""
     dll = release_dll(d)
+    if dll and is_hlx(dll):
+        return helix_version(Path(d) / RELEASE_NGX_DLL)
+    return helix_version(dll) if dll else None
+
+
+def release_ngx_dll(d):
+    """3.0+: HLX DLSS (HelixSR/helixsr.dll) in a release that has HLX FSR 4, or None."""
+    p = Path(d) / RELEASE_NGX_DLL
+    return p if (Path(d) / HLX_DIR).is_dir() and p.exists() and is_helixsr(p) else None
+
+
+def release_ini(d):
+    """The helixsr.ini a release ships: next to its DLL (HelixSR-fsrfg from 2.0; HelixSR/, for HLX DLSS, from 3.0),
+    else in its top folder. HLX FSR 4 has none."""
+    dll = release_ngx_dll(d) or release_dll(d)
     if dll and (dll.parent / "helixsr.ini").exists():
         return dll.parent / "helixsr.ini"
     return Path(d) / "helixsr.ini"
@@ -167,9 +195,12 @@ def local_versions():
         if dll:
             meta = read_json(d / DOWNLOAD_META) or {}
             now = upstream.get(tag, {}).get("sha256")
-            version = helix_version(dll) or (tag.lstrip("v") if tag != LEGACY_TAG else None)   # 1.2.0 has none inside
+            version = release_version(d) or (tag.lstrip("v") if tag != LEGACY_TAG else None)   # 1.2.0 has none inside
             out.append({"tag": tag, "dir": str(d), "version": version, "kind": dll_kind(dll),
+                        "upscaler": upscaler_name(dll),
                         "built": has_network(dll), "setup_script": (d / "helixsr-setup.sh").exists(),
+                        # 3.0+: HLX DLSS built (the setup builds it before HLX FSR 4, so it can be ready alone)
+                        "dlss_built": bool(release_ngx_dll(d)) and has_network(release_ngx_dll(d)),
                         "verified": bool(meta.get("verified")),
                         # the zip on GitHub is no longer the one downloaded (re-uploaded under the same version)
                         "replaced_upstream": bool(now and meta.get("sha256") and now != meta["sha256"])})
@@ -218,25 +249,69 @@ def clean_env():
 
 
 def is_helixsr(path):
+    """HelixSR's DLL, or HLX FSR 4's (HelixSR's FSR drop-in from 3.0 on)."""
     # "HelixSR 1.4.1" from 1.3 on; 1.2.0 only names itself "HelixSR (3.1.5)" (its FSR interface version)
     try:
         with open(path, "rb") as f:
-            return re.search(rb"HelixSR (\d+\.\d+\.\d+|\(3\.1\.\d+\))", f.read(4 << 20)) is not None
+            head = f.read(4 << 20)
+        return re.search(rb"HelixSR (\d+\.\d+\.\d+|\(3\.1\.\d+\))", head) is not None or HLX_MARK in head
+    except OSError:
+        return False
+
+
+def is_hlx(path):
+    try:
+        with open(path, "rb") as f:
+            return HLX_MARK in f.read(4 << 20)
+    except OSError:
+        return False
+
+
+def hlx_built(path):
+    """HLX FSR 4's DLL carries its shaders: the setup builds them from AMD's FSR 4 driver file and appends them."""
+    try:
+        with open(path, "rb") as f:
+            f.seek(-24, os.SEEK_END)
+            return f.read(8) == HLX_DATA_MAGIC
     except OSError:
         return False
 
 
 def helix_version(path):
+    """HelixSR's version in its DLL. HLX FSR 4's DLL doesn't name it: for an install, the marker next to it does."""
     try:
         with open(path, "rb") as f:
-            m = re.search(rb"\x00HelixSR (\d+\.\d+\.\d+)\x00", f.read(4 << 20))
-        return m.group(1).decode() if m else None
+            head = f.read(4 << 20)
     except OSError:
         return None
+    m = re.search(rb"\x00HelixSR (\d+\.\d+\.\d+)\x00", head)
+    if m:
+        return m.group(1).decode()
+    if HLX_MARK in head:
+        for name in (INSTALL_MARKER, OPTI_MARKER):
+            v = (read_json(Path(path).parent / name) or {}).get("helixsr")
+            if isinstance(v, str) and re.fullmatch(r"\d+\.\d+\.\d+", v):
+                return v
+    return None
+
+
+def upscaler_name(path):
+    """What a HelixSR DLL is, for the panel: "HLX FSR 4", "HLX DLSS" (3.0+'s NGX DLL, as nvngx.dll in an install) or
+    None (HelixSR's own network up to 2.0)."""
+    if not path:
+        return None
+    if is_hlx(path):
+        return HLX_NAME
+    if Path(path).name.lower() in (DLL_NGX, "helixsr.dll") and version_key(helix_version(path)) >= (3,):
+        return HLX_DLSS_NAME
+    return None
 
 
 def has_network(path):
-    """True when the setup appended the network to the DLL (or left it as separate files next to it)."""
+    """True when the setup appended the network to the DLL (or left it as separate files next to it); for HLX FSR 4,
+    when the setup appended its shaders."""
+    if is_hlx(path):
+        return hlx_built(path)
     if has_embedded_network(path):
         return True
     return all((Path(path).parent / n).exists() for n in SEPARATE_FILES)
@@ -906,7 +981,8 @@ def process_started(p):
 
 
 def last_played(appid):
-    """When Steam last started this game (localconfig.vdf, LastPlayed), or None."""
+    """localconfig.vdf's LastPlayed for this game, or None. Steam writes it again when the game quits, so after a
+    session it's the end of that session, not its start (last_session_start has the start)."""
     best, seen = None, set()
     for root in steam_roots():
         try:
@@ -925,6 +1001,44 @@ def last_played(appid):
                 n = re.search(r'"LastPlayed"\s*"(\d+)"', m.group(1))
                 if n:
                     best = max(best or 0, int(n.group(1)))
+    return best
+
+
+GAMEPROCESS_TAIL = 2 << 20   # the end of Steam's gameprocess_log.txt that is read (it grows to megabytes)
+
+
+def last_session_start(appid):
+    """When Steam started this game's last (or current) session, or None: the first "AppID <id> adding PID" line after
+    its last "Remove <id> from running list" in Steam's logs/gameprocess_log.txt (local time). Only its end is read."""
+    best = None
+    add = re.compile(r"^\[(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d)\] AppID %s adding PID " % re.escape(str(appid)))
+    removed = "] Remove %s from running list" % appid
+    logs = set()
+    for root in steam_roots():
+        try:
+            logs.add((root / "logs/gameprocess_log.txt").resolve())
+        except (OSError, RuntimeError):
+            continue
+    for log in logs:
+        try:
+            with open(log, "rb") as f:
+                size = f.seek(0, os.SEEK_END)
+                f.seek(max(0, size - GAMEPROCESS_TAIL))
+                lines = f.read().decode("utf-8", "replace").splitlines()[1 if size > GAMEPROCESS_TAIL else 0:]
+        except OSError:
+            continue
+        start = None
+        for line in lines:
+            if removed in line:
+                start = None
+                continue
+            m = add.match(line)
+            if m and start is None:
+                try:
+                    start = time.mktime(time.strptime(m.group(1), "%Y-%m-%d %H:%M:%S"))
+                except (ValueError, OverflowError):
+                    continue
+                best = max(best or 0, start)
     return best
 
 
@@ -1090,17 +1204,32 @@ def helix_state():
             "dir": cur["dir"] if cur else (str(version_dir(tag)) if tag else None),
             "downloaded": cur is not None, "version": cur["version"] if cur else None,
             "built": bool(cur and cur["built"]), "setup_script": bool(cur and cur["setup_script"]),
-            "kind": cur["kind"] if cur else None}
+            "kind": cur["kind"] if cur else None, "upscaler": cur["upscaler"] if cur else None,
+            "dlss_built": bool(cur and cur["dlss_built"])}
 
 
-def built_dll():
-    d = active_dir()
+def built_dll(tag=None):
+    """The selected release's DLL for games, or (tag) that downloaded release's."""
+    tag = tag or active_tag()
+    d = version_dir(tag) if tag else active_dir()
     dll = release_dll(d)
     if not dll:
-        raise RuntimeError(f"HelixSR {active_tag()} isn't downloaded yet ({d}).")
+        raise RuntimeError(f"HelixSR {tag} isn't downloaded yet ({d}).")
     if not has_network(dll):
-        raise RuntimeError(f"HelixSR {active_tag()} has no network yet. Run its setup first "
+        raise RuntimeError(f"HelixSR {tag} has no network yet. Run its setup first "
                            f"(otherwise games show a red frame).")
+    return dll
+
+
+def own_network_dll(tag):
+    """A release with HelixSR's own network (before 3.0: not HLX FSR 4, not the 1.5/1.6 DLSS replacement), built, for
+    the OptiScaler section of a 3.x release: its HLX DLSS needs HelixSR Scaler, so HelixSR's DLSS network comes from
+    the newest such release (2.0.0) instead."""
+    if not valid_tag(tag) or not any(v["tag"] == tag for v in local_versions()):
+        raise RuntimeError(f"HelixSR {tag} isn't downloaded.")
+    dll = built_dll(tag)
+    if is_hlx(dll) or dll_kind(dll) != "ffx":
+        raise RuntimeError(f"HelixSR {tag} has no network of its own to install next to HLX FSR 4.")
     return dll
 
 
@@ -1207,7 +1336,63 @@ def tail_lines(p, n=400):
         return []
 
 
+HLX_RUNNING = re.compile(r"own runtime active")
+HLX_ERRORS = re.compile(r"shaders are not built yet|cannot run the own runtime|could not be built|own runtime build "
+                        r"failed|create failed|frame skipped|failed$")
+HLX_FALLBACK = re.compile(r"AMD's original instead|using AMD provider|FSR \S+ requested: AMD's original")
+
+
+def hlx_log_lines(log, limit=400):
+    """HLX FSR 4's lines in OptiScaler.log: inside OptiScaler it logs there ("[I] HLX-FSR-4 ..."), not to HLX_FSR.log.
+    Read through the whole file: its start-up lines sit early in the session, before OptiScaler's per-frame lines."""
+    out = []
+    try:
+        with open(log, "rb") as f:
+            for raw in f:
+                if b"HLX-FSR-4" in raw or b"HLX FSR 4" in raw:
+                    out.append(raw.decode("utf-8", errors="replace").rstrip())
+                    del out[:-limit]
+    except OSError:
+        pass
+    return out
+
+
+def hlx_log_check(log, info, lines=None):
+    """HLX_FSR.log (or HLX FSR 4's lines from OptiScaler.log): "own runtime active" when HLX FSR 4 upscales; AMD's FSR
+    takes over when its shaders aren't built, the GPU can't run them or a request isn't covered (the log says so)."""
+    lines = tail_lines(log) if lines is None else lines
+    text = "\n".join(lines)
+    if HLX_ERRORS.search(text):
+        status = "error"
+    elif HLX_RUNNING.search(text):
+        status = "fallback" if HLX_FALLBACK.search(text) else "running"
+    elif HLX_FALLBACK.search(text):
+        status = "fallback"
+    else:
+        status = "loaded"
+    hl = [l.strip() for l in lines if re.search(r"own runtime|GPU|create|AMD's original|not built|HLX FSR 4 \(", l)]
+    return {"exists": True, "mtime": info["mtime"], "status": status, "highlights": hl[-12:], "tail": lines[-15:],
+            "last_upscale": None, "log": Path(log).name}
+
+
+def opti_hlx_check(opti_dir):
+    """The check for HLX FSR 4 in a game's OptiScaler: HLX_FSR.log next to it if it wrote one, else its lines in
+    OptiScaler.log (OptiScaler writes that file only with LogToFile = true)."""
+    sub = Path(opti_dir) / OPTI_SUBDIR
+    check = helix_log_check(sub)
+    if check["exists"]:
+        return check
+    log = opti_log_path(opti_dir)
+    info = file_info(log)
+    lines = hlx_log_lines(log) if info else []
+    return hlx_log_check(log, info, lines) if lines else check
+
+
 def helix_log_check(folder):
+    hlx_log = Path(folder) / HLX_LOG
+    hlx_info = file_info(hlx_log)
+    if hlx_info and any(is_hlx(Path(folder) / n) for n in NAMES):
+        return hlx_log_check(hlx_log, hlx_info)
     log = Path(folder) / "helixsr.log"
     info = file_info(log)
     if not info:
@@ -1228,7 +1413,7 @@ def helix_log_check(folder):
             seen.add(k)
             uniq.append(l)
     return {"exists": True, "mtime": info["mtime"], "status": status, "highlights": list(reversed(uniq[:12])),
-            "tail": lines[-15:], "last_upscale": last_upscale(lines)}
+            "tail": lines[-15:], "last_upscale": last_upscale(lines), "log": "helixsr.log"}
 
 
 QUALITY_MODES = [(1.0, "native / DLAA"), (1.5, "Quality"), (1.7, "Balanced"), (2.0, "Performance"),
@@ -1301,7 +1486,7 @@ def opti_log_check(opti_dir):
         return {"exists": False, "path": str(log), "lines": [], "not_nvidia": False}
     all_lines = tail_lines(log, 4000)
     lines = [l.strip() for l in all_lines
-             if re.search(r"helixsr|amd_fidelityfx|ffx.*upscaler|upscaler.*ffx|nvngx|dlss|not running on nvidia", l, re.I)]
+             if re.search(r"helixsr|hlx|amd_fidelityfx|ffx.*upscaler|upscaler.*ffx|nvngx|dlss|not running on nvidia", l, re.I)]
     # HelixSR 1.5+ needs the GPU to look like an NVIDIA one; OptiScaler says this when the launch option is missing
     not_nvidia = any("not running on nvidia" in l.lower() for l in all_lines)
     return {"exists": True, "path": str(log), "mtime": info["mtime"], "lines": lines[-15:], "not_nvidia": not_nvidia}
@@ -1561,7 +1746,7 @@ def opti_state(opti_dir, game_folder):
     current_sr = None if configured else resolve_ffx(opti_dir, text, "FfxDx12SRPath", NAMES[0])
     if current_sr and is_helixsr(current_sr):
         current_sr = None
-    helix_files = sub / NAMES[1]
+    helix_files = sub / NAMES[1] if (sub / NAMES[1]).exists() else sub / NAMES[0]
     kind = installed_kind(opti_dir)
     nvngx = ini_get(text, "Libraries", "NvngxPath") or "auto"
     if kind == "official":
@@ -1585,6 +1770,7 @@ def opti_state(opti_dir, game_folder):
         "installed_kind": kind,
         "helix_folder_present": kind is not None,
         "helix_version": helix_version(helix_files) if helix_files.exists() else None,
+        "upscaler": upscaler_name(helix_files) if helix_files.exists() else None,
         "nvngx_path": nvngx,
         "dx12_upscaler": ini_get(text, "Upscalers", "Dx12Upscaler") or "auto",
         "upscaler_index": ini_get(text, "FSR", "UpscalerIndex") or "auto",
@@ -1623,10 +1809,20 @@ def install_direct(target, dll, ini_src):
             os.replace(orig, target)
             raise
         msg = f"Installed HelixSR (game's file kept as {orig.name})"
-    if ini_src.exists() and not (target.parent / "helixsr.ini").exists():
-        shutil.copyfile(ini_src, target.parent / "helixsr.ini")
-    (target.parent / INSTALL_MARKER).write_text(
-        json.dumps({"helixsr": helix_version(dll) or "?", "files": [target.name]}, indent=1) + "\n")
+    if is_hlx(dll):
+        # HLX FSR 4 lists the game's own FSR (the *.original.dll backup) after itself and hands it what it doesn't
+        # cover. It has no helixsr.ini: one left by an earlier HelixSR here goes when it holds only defaults.
+        ini = target.parent / "helixsr.ini"
+        if ini.exists() and ini_holds_only_defaults(read_text(ini)):
+            ini.unlink()
+        record = {"helixsr": release_version(dll.parent.parent) or "?", "upscaler": HLX_NAME, "files": [target.name],
+                  "route": "direct"}
+        msg = msg.replace("HelixSR", f"HelixSR's {HLX_NAME}", 1)
+    else:
+        if ini_src.exists() and not (target.parent / "helixsr.ini").exists():
+            shutil.copyfile(ini_src, target.parent / "helixsr.ini")
+        record = {"helixsr": helix_version(dll) or "?", "files": [target.name]}
+    (target.parent / INSTALL_MARKER).write_text(json.dumps(record, indent=1) + "\n")
     return msg
 
 
@@ -1660,7 +1856,7 @@ def uninstall_direct(target, ini_src):
     dis = disabled_path(target)
     if not orig.exists() and dis.exists() and is_helixsr(dis) and not is_helixsr(target):
         dis.unlink()   # disabled: the game's file is already in place
-        for extra in (INSTALL_MARKER, "helixsr.log", *SEPARATE_FILES):
+        for extra in (INSTALL_MARKER, "helixsr.log", HLX_LOG, *SEPARATE_FILES):
             (target.parent / extra).unlink(missing_ok=True)
         return f"Removed the disabled HelixSR next to {target.name}"
     if not orig.exists():
@@ -1670,7 +1866,7 @@ def uninstall_direct(target, ini_src):
     if target.exists():
         target.unlink()
     os.replace(orig, target)
-    for extra in (INSTALL_MARKER, "helixsr.log", *SEPARATE_FILES):
+    for extra in (INSTALL_MARKER, "helixsr.log", HLX_LOG, *SEPARATE_FILES):
         p = target.parent / extra
         if p.exists():
             p.unlink()
@@ -1700,6 +1896,8 @@ def install_optiscaler(opti_dir, dll, ini_src, keep_fsr4):
                            f"didn't create. Rename or remove it, then try again.")
     sub.mkdir(exist_ok=True)
 
+    if is_hlx(dll):
+        return install_optiscaler_hlx(opti_dir, dll, text, prev, cur_sr)
     copy_helix(dll, sub / NAMES[1])
     copy_helix(dll, sub / NAMES[0])
     # frame generation: HelixSR forwards non-upscaling effects to amd_fidelityfx_dx12.original.dll next to it
@@ -1721,6 +1919,9 @@ def install_optiscaler(opti_dir, dll, ini_src, keep_fsr4):
     if keep_fsr4 and cur_sr and not is_helixsr(cur_sr):
         shutil.copyfile(cur_sr, sub / FSR4_COPY_NAME)
         htext = ini_set(htext, "Forwarding", "UpscalerDll", FSR4_COPY_NAME)
+    elif keep_fsr4 and (sub / FSR4_COPY_NAME).exists():
+        # AMD's FSR an earlier install here kept (HLX FSR 4 lists it after itself): OptiScaler now points at HelixSR
+        htext = ini_set(htext, "Forwarding", "UpscalerDll", FSR4_COPY_NAME)
     elif not keep_fsr4:
         if (sub / FSR4_COPY_NAME).exists():
             (sub / FSR4_COPY_NAME).unlink()
@@ -1741,12 +1942,56 @@ def install_optiscaler(opti_dir, dll, ini_src, keep_fsr4):
         backup = opti_dir / "OptiScaler.ini.helixsr-backup"
         if not backup.exists():
             shutil.copyfile(ini, backup)
+    for (s, k) in wanted:   # a setting the earlier install here didn't change (HLX FSR 4 leaves FfxDx12Path alone)
+        prev.setdefault(f"{s}/{k}", ini_get(text, s, k))
     for (s, k), v in wanted.items():
         text = ini_set(text, s, k, v)
     write_text(ini, text)
     marker.write_text(json.dumps({"previous": prev, "set": {f"{s}/{k}": v for (s, k), v in wanted.items()},
                                   "helixsr": helix_version(dll)}, indent=1) + "\n")
     return "OptiScaler now uses HelixSR" + (" (FSR 4 stays selectable)" if (sub / FSR4_COPY_NAME).exists() else "")
+
+
+def install_optiscaler_hlx(opti_dir, dll, text, prev, cur_sr):
+    """HLX FSR 4 (3.0+) as OptiScaler's FSR upscaler (FfxDx12SRPath), as HelixSR Scaler carries it. It is an upscaler
+    only: OptiScaler's FidelityFX DLL (FfxDx12Path, frame generation) stays the game's. AMD's own FSR goes next to it
+    as amd_fidelityfx_upscaler_dx12.amd.dll, which HLX FSR 4 lists after itself and hands what it doesn't cover."""
+    sub = opti_dir / OPTI_SUBDIR
+    copy_helix(dll, sub / NAMES[0])
+    # what an earlier HelixSR (up to 2.0) put here for OptiScaler's FidelityFX DLL and HelixSR's settings
+    for n in (NAMES[1], "amd_fidelityfx_dx12.original.dll", "amd_fidelityfx_framegeneration_dx12.dll", "helixsr.ini",
+              "helixsr.log"):
+        (sub / n).unlink(missing_ok=True)
+    if cur_sr and not is_helixsr(cur_sr):
+        shutil.copyfile(cur_sr, sub / FSR4_COPY_NAME)
+    wanted = {
+        ("Upscalers", "Dx12Upscaler"): opti_upscaler_value(text),
+        ("Libraries", "FfxDx12SRPath"): win_path(sub / NAMES[0]),
+    }
+    if ini_get(text, "FSR", "UpscalerIndex") is not None:
+        wanted[("FSR", "UpscalerIndex")] = "0"   # HLX FSR 4 is the first upscaler its DLL lists
+    marker = sub / OPTI_MARKER
+    old = read_json(marker) or {}
+    if prev is None:
+        prev = {}
+        backup = opti_dir / "OptiScaler.ini.helixsr-backup"
+        if not backup.exists():
+            shutil.copyfile(opti_dir / "OptiScaler.ini", backup)
+    # a setting an earlier install changed that HLX FSR 4 doesn't need (FfxDx12Path) goes back to what it was
+    for sk in [k for k in prev if tuple(k.split("/", 1)) not in wanted]:
+        s, k = sk.split("/", 1)
+        if (ini_get(text, s, k) or "") == (old.get("set", {}).get(sk) or ""):
+            text = ini_set(text, s, k, prev[sk])
+        prev.pop(sk)
+    for (s, k), v in wanted.items():
+        prev.setdefault(f"{s}/{k}", ini_get(text, s, k))
+        text = ini_set(text, s, k, v)
+    write_text(opti_dir / "OptiScaler.ini", text)
+    marker.write_text(json.dumps({"previous": prev, "set": {f"{s}/{k}": v for (s, k), v in wanted.items()},
+                                  "helixsr": release_version(dll.parent.parent), "upscaler": HLX_NAME},
+                                 indent=1) + "\n")
+    return f"OptiScaler now uses {HLX_NAME}" + \
+        (" (AMD's FSR stays selectable after it)" if (sub / FSR4_COPY_NAME).exists() else "")
 
 
 def refuse_official(opti_dir):
@@ -1898,6 +2143,10 @@ PHASES = [  # (log pattern, progress %, label)
 BUILD_PROGRESS = re.compile(r"\[[#-]{5,}\]\s+(\d+)%\s+\d+:\d\d\s+(.*?)\s*$")
 PROMPT_LINE = re.compile(r"\[Y/n")   # the setup's own game installer asking; never answered by the plugin
 ERROR_PATTERN = re.compile(r"error|failed|traceback|no such file|not found|denied|mismatch|cannot|killed", re.I)
+HLX_STEP_LINE = "[decky] building HLX FSR 4"   # the plugin's second step (3.0+), see hlx_step_script
+# 3.0+: the setup itself stops at AMD's download (it asks only on a terminal); the plugin's second step builds HLX FSR 4,
+# so these lines are expected once that step has run
+HLX_STEP_EXPECTED = re.compile(r"AMD's file is needed for HLX FSR 4|the setup stopped \(exit 1\)")
 
 
 def proc_table():
@@ -1949,7 +2198,19 @@ def short_cmd(cmd, comm):
 
 def phase_of(lines):
     pct, label = 0, "Starting"
+    hlx = False
     for line in lines:
+        if HLX_STEP_LINE in line:
+            hlx, pct, label = True, 60, f"Building {HLX_NAME}"
+            continue
+        if hlx:
+            m = BUILD_PROGRESS.search(line)
+            if m:
+                bar = int(m.group(1))
+                pct, label = 60 + int(bar * 0.39), f"{HLX_NAME}: {m.group(2)} ({bar}%)"
+            elif f"done: {HLX_NAME} built" in line:
+                pct, label = 100, "Finished"
+            continue
         for pat, p, l in PHASES:
             if re.search(pat, line) and p >= pct:
                 pct, label = p, l
@@ -2030,6 +2291,40 @@ def setup_command(script, d, built, dlss=None):
     return ["bash", str(build_only_script(script)), "--yes"] + rebuild
 
 
+HLX_STEP = r'''rc=$1; REL=$2; LOG=$3
+DATA="${XDG_DATA_HOME:-$HOME/.local/share}/HelixSR"
+SETUP="$REL/setup/helixsr_setup.py"
+PY=$(sed -n 's/^\[helixsr-setup\] python: //p' "$LOG" | tail -n 1)
+[ -n "$PY" ] && [ -x "$PY" ] || exit "$rc"
+ST=$("$PY" "$SETUP" "$REL" --status) || exit "$rc"
+case "$ST" in *network=1*) ;; *) exit "$rc" ;; esac
+case "$ST" in *hlx=1*) exit "$rc" ;; esac
+WRAP="$DATA/dxc-wine.sh"
+WINE=$(sed -n 's/.*exec "\([^"]*\)" "[^"]*dxc\.exe".*/\1/p' "$WRAP" 2>/dev/null | head -n 1)
+[ -n "$WINE" ] || { echo "[decky] HLX FSR 4 was not built: the setup's shader compiler wasn't found"; exit 4; }
+ARGS=(--fg-only --no-fg --yes --dxc "$WRAP" --dxc-dir "$DATA/dxc-win/bin/x64" --wine "$WINE" --wineprefix "$DATA/wineprefix")
+[ -f "$DATA/dxc-win-2609/bin/x64/dxc.exe" ] && ARGS+=(--dxc2609-dir "$DATA/dxc-win-2609/bin/x64")
+echo "@LINE@ (AMD's FSR 4 driver file, about 420 MB from AMD)"
+"$PY" "$SETUP" "$REL" "${ARGS[@]}"; r=$?
+rm -rf "$DATA/wineprefix"
+exit $r
+'''.replace("@LINE@", HLX_STEP_LINE)
+
+
+def hlx_step_script(d):
+    """3.0+: HelixSR's setup builds HLX FSR 4 from AMD's FSR 4 driver file, which it downloads only after a yes typed
+    on a terminal, or with --yes, which helixsr-setup.sh also hands to its game installer (so never passed to it). The
+    setup therefore builds the network and stops at that question. This second step then runs the release's
+    helixsr_setup.py with --fg-only --yes (the user agreed to AMD's download in the panel): it builds HLX FSR 4 and
+    nothing else, and never starts the game installer. It uses the Python, shader compiler and Wine the setup found
+    (its log line and its dxc-wine.sh). Exit code: the setup's when nothing is left to build, else this step's (4: HLX
+    FSR 4 not built). None for a release without HLX FSR 4."""
+    d = Path(d)
+    if not (d / "setup" / "hlxfsr4").is_dir() or not (d / "setup" / "helixsr_setup.py").is_file():
+        return None
+    return HLX_STEP
+
+
 def setup_status():
     st = read_json(SETUP_STATUS) or {}
     table = proc_table()
@@ -2050,15 +2345,16 @@ def setup_status():
     except ValueError:
         rc = None
     lines = tail_lines(SETUP_LOG, 2000) if SETUP_LOG.exists() else []
+    hlx_step = any(HLX_STEP_LINE in l for l in lines)
     pct, label = phase_of(lines)
     shaders = shader_progress() if tree else None
     if shaders and label.startswith("Step 5") and shaders[1]:
         pct = 50 + int(49 * min(1.0, shaders[0] / shaders[1]))
         label = f"Step 5/5: compiling shaders ({shaders[0]}/{shaders[1]})"
     tag = st.get("tag")
-    # the DLL the setup builds into: the release's top folder up to 1.9, HelixSR-fsrfg from 2.0
-    built = bool(tag) and valid_tag(tag) and any(
-        p.exists() and has_network(p) for p in (version_dir(tag) / DLL_FFX, version_dir(tag) / RELEASE_DLL_DIR / DLL_FFX))
+    # the DLL the setup builds into: the release's top folder up to 1.9, HelixSR-fsrfg in 2.0, HLX FSR 4's from 3.0
+    dll = release_dll(version_dir(tag)) if tag and valid_tag(tag) else None
+    built = bool(dll) and has_network(dll)
     if tree:
         state = "running"
     elif rc is not None:
@@ -2080,7 +2376,7 @@ def setup_status():
         "cpu_seconds": round(sum(table[p][3] for p in tree if p in table), 1),
         "processes": [short_cmd(table[p][2], table[p][1]) for p in tree if p in table
                       and not re.match(r"(bash|sh|wineserver|tee)\b", table[p][1])][:4],
-        "errors": [l.strip() for l in lines if ERROR_PATTERN.search(l)][-6:],
+        "errors": [l.strip() for l in lines if ERROR_PATTERN.search(l) and not (hlx_step and HLX_STEP_EXPECTED.search(l))][-6:],
         "tail": [l for l in lines if l.strip() and not PROMPT_LINE.search(l)][-8:],
         "log_path": str(SETUP_LOG),
     }
@@ -2399,6 +2695,13 @@ class Plugin:
             return {"ok": False, "error": "This release's setup doesn't say where NVIDIA's DLSS DLL comes from, so the "
                                           "plugin can't build it. Update the plugin, or run its setup in Desktop Mode."}
         dlss_file = SETUP_TMP / "nvngx_dlss.dll"
+        # 3.0+: after the setup, the plugin's second step builds HLX FSR 4 (hlx_step_script)
+        hlx_step = hlx_step_script(d)
+        hlx_file = SETUP_DIR / "hlx-fsr4-step.sh"
+        hlx_file.unlink(missing_ok=True)
+        if hlx_step:
+            hlx_file.write_text(hlx_step)
+        after = f'bash "{hlx_file}" "$rc" "{d}" "{SETUP_LOG}"; rc=$?; ' if hlx_step else ""
         try:
             cmd = setup_command(script, d, bool(dll and has_network(dll)), dlss_file if nvidia else None)
         except RuntimeError as e:
@@ -2414,10 +2717,11 @@ class Plugin:
                 wrapper = ('echo "[helixsr-setup] downloading nvngx_dlss.dll from NVIDIA ($2)"; '
                            'curl -fsSL --retry 3 -o "$1" "$2" && [ "$(sha256sum "$1" | cut -d " " -f 1)" = "$3" ] '
                            '|| { echo "[decky] the DLSS DLL from NVIDIA could not be downloaded or verified"; false; } '
-                           '&& { shift 3; "$@"; }; rc=$?; rm -f "' + str(dlss_file) + '"; echo $rc > "$0"')
+                           '&& { shift 3; "$@"; }; rc=$?; rm -f "' + str(dlss_file) + '"; ' + after +
+                           'echo $rc > "$0"')
                 argv = ["bash", "-c", wrapper, str(SETUP_RC), str(dlss_file), nvidia[0], nvidia[1], *cmd]
             else:
-                argv = ["bash", "-c", '"$@"; echo $? > "$0"', str(SETUP_RC), *cmd]
+                argv = ["bash", "-c", '"$@"; rc=$?; ' + after + 'echo $rc > "$0"', str(SETUP_RC), *cmd]
             proc = subprocess.Popen(
                 argv, cwd=str(d), env=env, stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
                 start_new_session=True)
@@ -2581,10 +2885,11 @@ class Plugin:
                     state = ("helixsr" if orig.exists() else "helixsr_no_backup") if helix else \
                         ("conflict" if orig.exists() else
                          "disabled" if disabled_path(t).exists() and is_helixsr(disabled_path(t)) else "original")
-                    v = helix_version(t) if helix else \
-                        helix_version(disabled_path(t)) if state == "disabled" else None
+                    dll = t if helix else disabled_path(t) if state == "disabled" else None
+                    v = helix_version(dll) if dll else None
                     direct.append({
                         "path": str(t), "rel": os.path.relpath(t, folder), "state": state, "helix_version": v,
+                        "upscaler": upscaler_name(dll),
                         "near_optiscaler": near_optiscaler(t, opti), "size": t.stat().st_size,
                         **dx11_info(t.parent),
                         "check": helix_log_check(t.parent), "ini": helix_ini_values(t.parent),
@@ -2593,7 +2898,7 @@ class Plugin:
                 for o in opti:
                     st = opti_state(o, folder)
                     sub = o / OPTI_SUBDIR
-                    st["check"] = helix_log_check(sub)
+                    st["check"] = opti_hlx_check(o) if st.get("upscaler") == HLX_NAME else helix_log_check(sub)
                     st["opti_log"] = opti_log_check(o)
                     st["ini"] = helix_ini_values(sub)
                     st["helix_folder"] = str(sub)
@@ -2611,7 +2916,8 @@ class Plugin:
                         "steam_busy": steam_busy(g),
                         # when the current (running) or last game session started, to judge how fresh a log is
                         "session": {"running": bool(procs), "started": min(starts) if starts else None,
-                                    "last_played": game_last_played(g)},
+                                    "last_played": game_last_played(g),
+                                    "last_started": last_session_start(g["appid"]) if steam_appid(g) else None},
                         "anticheat": anticheat, "anticheat_ack": bool(acks.get(str(g["appid"])))}
             return await asyncio.to_thread(work)
         except Exception as e:
@@ -2686,11 +2992,25 @@ class Plugin:
             return uninstall_direct(self._checked_target(path), release_ini(active_dir()))
         return await self._do(work)
 
-    async def install_optiscaler(self, path, keep_fsr4, ignore_dx11=False):
+    async def install_optiscaler(self, path, keep_fsr4, ignore_dx11=False, dlss=False, tag=None):
+        """dlss: 3.0+'s HLX DLSS as OptiScaler's DLSS (NvngxPath, like 1.5) instead of HLX FSR 4 as its FSR (no longer
+        offered in the panel: stock OptiScaler 0.10 never counts the Deck's GPU as DLSS-capable). tag: a downloaded
+        release with HelixSR's own network (2.0.0) instead of the selected one, next to a 3.x release."""
         def work():
             self._guard(path, True)
             if not ignore_dx11:   # "Install anyway": the user knows the game runs on DirectX 12
                 refuse_dx11(self._checked_opti(path))
+            if tag:
+                dll = own_network_dll(tag)
+                return install_optiscaler(self._checked_opti(path), dll, release_ini(version_dir(tag)),
+                                          bool(keep_fsr4))
+            if dlss:
+                ngx = release_ngx_dll(active_dir())
+                if not ngx:
+                    raise RuntimeError(f"HelixSR {active_tag()} has no {HLX_DLSS_NAME}.")
+                if not has_network(ngx):
+                    raise RuntimeError(f"{HLX_DLSS_NAME} isn't built yet. Run the setup first.")
+                return install_optiscaler_ngx(self._checked_opti(path), ngx)
             return install_optiscaler(self._checked_opti(path), built_dll(), release_ini(active_dir()),
                                       bool(keep_fsr4))
         return await self._do(work)
@@ -2736,6 +3056,8 @@ class Plugin:
             if not inside_library(f / "helixsr.ini") or \
                     not any(is_helixsr(f / n) for n in (*NAMES, DLL_NGX, "helixsr.dll")):
                 raise RuntimeError("No HelixSR install in that folder.")
+            if any(is_hlx(f / n) for n in NAMES):
+                raise RuntimeError(f"{HLX_NAME} has no settings file.")
             ini = f / "helixsr.ini"
             if not ini.exists():
                 src = release_ini(active_dir())

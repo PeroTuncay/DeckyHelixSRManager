@@ -29,7 +29,9 @@ type LocalVersion = {
   dir: string;
   version: string | null;
   kind: ReleaseKind;
+  upscaler: string | null; // "HLX FSR 4": 3.0+ puts HLX FSR 4 into games, not HelixSR's own network
   built: boolean;
+  dlss_built: boolean; // 3.0+: HLX DLSS built too
   setup_script: boolean;
   verified?: boolean; // the download matched GitHub's SHA256
   replaced_upstream?: boolean; // the zip on GitHub changed since it was downloaded
@@ -55,6 +57,8 @@ type HelixState = {
   setup_script: boolean;
   setup: SetupStatus;
   kind: ReleaseKind | null;
+  upscaler: string | null;
+  dlss_built: boolean;
 };
 
 type SetupStatus = {
@@ -80,7 +84,9 @@ type Diagnostic = { name: string; ok: boolean; detail: string };
 
 type Check = {
   exists: boolean;
-  status: "running" | "error" | "loaded" | "none";
+  // fallback: HLX FSR 4 handed (some) upscaling to AMD's own FSR
+  status: "running" | "fallback" | "error" | "loaded" | "none";
+  log?: string; // helixsr.log, or HLX FSR 4's HLX_FSR.log
   mtime?: number;
   highlights: string[];
   tail: string[];
@@ -108,6 +114,7 @@ type DirectTarget = {
   rel: string;
   state: "original" | "helixsr" | "helixsr_no_backup" | "conflict" | "disabled";
   helix_version: string | null;
+  upscaler: string | null;
   near_optiscaler: boolean;
   size: number;
   dx11: boolean; // the game exe next to it is DirectX 11 only: HelixSR can't run there
@@ -124,6 +131,7 @@ type OptiTarget = {
   nvngx_path: string;
   helix_folder_present: boolean;
   helix_version: string | null;
+  upscaler: string | null;
   dx12_upscaler: string;
   upscaler_index: string;
   ffx_path: string;
@@ -142,7 +150,29 @@ type OptiTarget = {
   helix_folder: string;
 };
 
-type Active = { ready: boolean; tag: string | null; version: string | null; kind: ReleaseKind | null };
+type Active = {
+  ready: boolean;
+  tag: string | null;
+  version: string | null;
+  kind: ReleaseKind | null;
+  upscaler: string | null;
+  dlss_built: boolean; // 3.0+: HLX DLSS built (for OptiScaler's DLSS)
+  // 3.0+: where HelixSR's own (DLSS) network comes from next to HLX FSR 4, see ownNetworkRelease
+  own_net: { tag: string; version: string | null } | null;
+};
+
+// HLX DLSS needs HelixSR Scaler: stock OptiScaler 0.10 never counts the Deck's GPU as DLSS-capable, so it runs its own
+// FSR 2.1.2 instead. HelixSR's own network for a 3.x release's OptiScaler section comes from the newest built release
+// before 3.0 (2.0.0): one that puts its own network into games as the FSR drop-in.
+function ownNetworkRelease(versions: LocalVersion[] | undefined): Active["own_net"] {
+  const v = (versions ?? []).find((x) => x.built && !x.upscaler && x.kind === "ffx");
+  return v ? { tag: v.tag, version: v.version } : null;
+}
+
+// "HelixSR 3.0.0 (HLX FSR 4)": from 3.0 games get HLX FSR 4 rather than HelixSR's own network
+function helixName(version: string | null | undefined, upscaler?: string | null) {
+  return `HelixSR ${version ?? ""}${upscaler ? ` (${upscaler})` : ""}`.replace("  ", " ");
+}
 
 function versionAtLeast(v: string | null | undefined, major: number, minor: number) {
   const m = (v ?? "").match(/(\d+)\.(\d+)/);
@@ -225,7 +255,12 @@ type GameDetail = Result & {
 };
 
 // the current (running) or last game session, to tell whether a helixsr.log belongs to it
-type Session = { running: boolean; started: number | null; last_played: number | null };
+// last_played: Steam's LastPlayed, which it writes again when the game quits (the session's end);
+// last_started: the last session's start from Steam's gameprocess_log.txt, when it's still in there
+type Session = { running: boolean; started: number | null; last_played: number | null; last_started?: number | null };
+
+// When the last session began: its logged start, else LastPlayed (late by however long that session lasted)
+const lastSessionStart = (s: Session) => s.last_started ?? s.last_played;
 
 // Why installing / removing is blocked right now (the backend checks the same), or null
 type Guard = { install: string | null; remove: string | null };
@@ -281,7 +316,8 @@ const getStores = callable<[], StoreInfo[]>("get_stores");
 const setStore = callable<[id: string, enabled: boolean], Result>("set_store");
 const installDirect = callable<[path: string, ignoreDx11?: boolean], Result>("install_direct");
 const uninstallDirect = callable<[path: string], Result>("uninstall_direct");
-const installOptiscaler = callable<[path: string, keepFsr4: boolean, ignoreDx11?: boolean], Result>("install_optiscaler");
+// tag: a downloaded release with HelixSR's own network (2.0.0) instead of the selected one
+const installOptiscaler = callable<[path: string, keepFsr4: boolean, ignoreDx11?: boolean, dlss?: boolean, tag?: string], Result>("install_optiscaler");
 const uninstallOptiscaler = callable<[path: string], Result>("uninstall_optiscaler");
 const setOptiLogging = callable<[path: string, on: boolean], Result>("set_opti_logging");
 const setHelixOption = callable<[folder: string, option: string, value: string], Result>("set_helix_option");
@@ -297,6 +333,7 @@ const mono: React.CSSProperties = {
 };
 const STATUS: Record<Check["status"], { color: string; text: string }> = {
   running: { color: "#5ba32b", text: "HelixSR network running" },
+  fallback: { color: "#e5a50a", text: "HLX FSR 4 loaded, but AMD's own FSR upscaled (see the log lines)" },
   error: { color: "#d94126", text: "HelixSR loaded, but the network is NOT running" },
   loaded: { color: "#e5a50a", text: "HelixSR loaded, no upscaling yet" },
   none: { color: "#8b929a", text: "HelixSR not loaded yet" },
@@ -819,8 +856,14 @@ function HelixSection({ state, refresh }: { state: HelixState | null; refresh: (
           "close this menu meanwhile, a notification tells you when it's done. NVIDIA's DLSS DLL is downloaded from " +
           "NVIDIA's GitHub (NVIDIA's license applies; checked against the checksum HelixSR names), plus a portable " +
           "Python and Microsoft's shader compiler; HelixSR's setup builds the network into the HelixSR DLL and NVIDIA's " +
-          "DLL is deleted again. HelixSR's own game installer is never answered, so it changes no game. The result is " +
-          "for this device only, don't share it."
+          "DLL is deleted again. " +
+          (local.get(tag)?.upscaler
+            ? "Then HLX FSR 4 is built (what games get from this release): about 420 MB of AMD's driver package " +
+              "(AMD Software 26.10.1) are downloaded from AMD (AMD's license applies), only its FSR 4 file is read and " +
+              "checked, nothing is installed. This adds several minutes. "
+            : "") +
+          "HelixSR's own game installer is never answered, so it changes no game. The result is for this device only, " +
+          "don't share it."
         }
         strOKButtonText="Download and build"
         onOK={async () => {
@@ -1014,11 +1057,12 @@ function sessionNote(check: Check, session?: Session): { color: string; text: st
       ? { color: "#5ba32b", text: "The log is from the current game session." }
       : { color: "#e5a50a", text: "Nothing logged in the current session yet: HelixSR hasn't been asked to upscale (select it in the game / OptiScaler)." };
   }
-  if (!session.last_played) return null;
-  if (!check.mtime) return { color: "#8b929a", text: `HelixSR wasn't loaded in the last session (${date(session.last_played)}).` };
-  return check.mtime >= session.last_played - 60
-    ? { color: "#8b929a", text: `The log is from the last game session (${date(session.last_played)}).` }
-    : { color: "#e5a50a", text: `The log is older than the last game session (${date(session.last_played)}): HelixSR wasn't used then.` };
+  const since = lastSessionStart(session);
+  if (!since) return null;
+  if (!check.mtime) return { color: "#8b929a", text: `HelixSR wasn't loaded in the last session (${date(since)}).` };
+  return check.mtime >= since - 60
+    ? { color: "#8b929a", text: `The log is from the last game session (${date(since)}).` }
+    : { color: "#e5a50a", text: `The log is older than the last game session (${date(since)}): HelixSR wasn't used then.` };
 }
 
 function CheckBlock({ check, ini, session, details }: { check: Check; ini: IniValues; session?: Session; details: boolean }) {
@@ -1040,7 +1084,7 @@ function CheckBlock({ check, ini, session, details }: { check: Check; ini: IniVa
       <PanelSectionRow>
         <div style={small}>
           <span style={{ color: s.color, fontWeight: 600 }}>● {s.text}</span>
-          {check.mtime && <div>helixsr.log written {new Date(check.mtime * 1000).toLocaleString()}</div>}
+          {check.mtime && <div>{check.log ?? "helixsr.log"} written {new Date(check.mtime * 1000).toLocaleString()}</div>}
           {fresh && <div style={{ color: fresh.color }}>{fresh.text}</div>}
           {u && (
             <div>
@@ -1196,7 +1240,7 @@ function DirectSection({
   const summary = items
     .map((t) =>
       t.state === "helixsr" || t.state === "helixsr_no_backup"
-        ? `HelixSR ${t.helix_version ?? ""} installed`
+        ? `${helixName(t.helix_version, t.upscaler)} installed`
         : t.dx11 && t.state === "original"
           ? "Not supported (DirectX 11 game)"
         : t.state === "disabled"
@@ -1219,10 +1263,10 @@ function DirectSection({
               <div style={{ fontWeight: 600 }}>{t.rel}</div>
               <div>
                 {t.state === "original" && "The game's own FSR 3.1. Installing HelixSR here means: select AMD FSR in the game."}
-                {installed && `HelixSR ${t.helix_version ?? ""} installed`}
+                {installed && `${helixName(t.helix_version, t.upscaler)} installed`}
                 {t.state === "helixsr_no_backup" && "HelixSR without a backup of the game's file"}
                 {t.state === "conflict" && "A backup exists but this file is not HelixSR (game updated?)"}
-                {t.state === "disabled" && `HelixSR ${t.helix_version ?? ""} disabled: the game's own FSR is active`}
+                {t.state === "disabled" && `${helixName(t.helix_version, t.upscaler)} disabled: the game's own FSR is active`}
               </div>
               {t.near_optiscaler && !installed && (
                 <div style={{ color: "#e5a50a" }}>
@@ -1281,14 +1325,16 @@ function DirectSection({
             {installed && (
               <>
                 <CheckBlock check={t.check} ini={t.ini} session={session} details={details} />
-                <IniControls
-                  folder={t.path.replace(/\/[^/]+$/, "")}
-                  ini={t.ini}
-                  style={settingsStyle("ffx", t.helix_version)}
-                  details={details}
-                  int8={versionAtLeast(t.helix_version, 1, 9) && t.ini.int8_supported}
-                  onChange={reload}
-                />
+                {!t.upscaler && (
+                  <IniControls
+                    folder={t.path.replace(/\/[^/]+$/, "")}
+                    ini={t.ini}
+                    style={settingsStyle("ffx", t.helix_version)}
+                    details={details}
+                    int8={versionAtLeast(t.helix_version, 1, 9) && t.ini.int8_supported}
+                    onChange={reload}
+                  />
+                )}
               </>
             )}
           </div>
@@ -1300,7 +1346,9 @@ function DirectSection({
 
 // --- Steam launch options (HelixSR 1.5+ needs the GPU to look like an NVIDIA one) --------------------------------------
 
-const NGX_LAUNCH_VARS = "PROTON_FORCE_NVAPI=1 DXVK_NVAPI_GPU_ARCH=AD100";
+// DXVK_NVAPI_ALLOW_OTHER_DRIVERS: dxvk-nvapi only initializes on an AMD GPU with it; OptiScaler 0.10 needs that to
+// count the GPU as DLSS-capable (otherwise its DLSS backend silently falls back to FSR 2.1.2)
+const NGX_LAUNCH_VARS = "PROTON_FORCE_NVAPI=1 DXVK_NVAPI_GPU_ARCH=AD100 DXVK_NVAPI_ALLOW_OTHER_DRIVERS=1";
 
 function readLaunchOptions(appId: number): Promise<string | null> {
   return new Promise((resolve) => {
@@ -1321,9 +1369,15 @@ function readLaunchOptions(appId: number): Promise<string | null> {
   });
 }
 
-const hasNgxVars = (o: string) => /\bPROTON_FORCE_NVAPI=1\b/.test(o) && /\bDXVK_NVAPI_GPU_ARCH=\S+/.test(o);
+// all three, so an option set by an older version of the plugin (without ALLOW_OTHER_DRIVERS) is offered again
+const hasNgxVars = (o: string) =>
+  /\bPROTON_FORCE_NVAPI=1\b/.test(o) && /\bDXVK_NVAPI_GPU_ARCH=\S+/.test(o) && /\bDXVK_NVAPI_ALLOW_OTHER_DRIVERS=1\b/.test(o);
 const stripNgxVars = (o: string) =>
-  o.replace(/\bPROTON_FORCE_NVAPI=\S*\s*/g, "").replace(/\bDXVK_NVAPI_GPU_ARCH=\S*\s*/g, "").trim();
+  o
+    .replace(/\bPROTON_FORCE_NVAPI=\S*\s*/g, "")
+    .replace(/\bDXVK_NVAPI_GPU_ARCH=\S*\s*/g, "")
+    .replace(/\bDXVK_NVAPI_ALLOW_OTHER_DRIVERS=\S*\s*/g, "")
+    .trim();
 
 // The variables go first; whatever was there (e.g. Decky Framegen's "~/fgmod/fgmod %command%") stays after them.
 function withNgxVars(o: string) {
@@ -1437,9 +1491,15 @@ function OptiItem({
 
   const ngxActive = active.kind === "ngx";
   const installed = o.installed_kind;
+  // 3.0+ releases: HLX FSR 4 (OptiScaler's FSR) or HLX DLSS (OptiScaler's DLSS, the "ngx" kind of install)
+  const hlxRelease = !!active.upscaler;
+  const hlxDlss = hlxRelease && installed === "ngx"; // an HLX DLSS install from before it was taken out of the panel
+  const own = hlxRelease ? active.own_net : null;
+  // HelixSR's own network installed next to the selected 3.x release on purpose: not an older leftover to switch from
+  const ownInstalled = !!own && installed === "ffx" && !o.upscaler && o.helix_version === own.version;
   const scaler = installed === "scaler"; // HelixSR Scaler from HelixSR Desktop: shown and checked, not managed
   const official = installed === "official" || scaler;
-  const differs = installed !== null && !!active.version && o.helix_version !== active.version;
+  const differs = installed !== null && !!active.version && o.helix_version !== active.version && !ownInstalled;
   const sizeMb = o.current_sr_dll ? (o.current_sr_dll.size / 1048576).toFixed(1) : null;
 
   return (
@@ -1454,11 +1514,13 @@ function OptiItem({
               ? `HelixSR ${o.helix_version ?? ""} installed by HelixSR's own setup as the game's DLSS (experimental route, without OptiScaler)`
               : `HelixSR ${o.helix_version ?? ""} installed by HelixSR's own setup, together with its own OptiScaler`
             : o.disabled
-            ? `HelixSR ${o.helix_version ?? ""} disabled: OptiScaler uses its previous upscaler`
+            ? `${helixName(o.helix_version, o.upscaler)} disabled: OptiScaler uses its previous upscaler`
             : o.configured
             ? installed === "ngx"
-              ? `Uses HelixSR ${o.helix_version ?? ""} as DLSS`
-              : `Uses HelixSR ${o.helix_version ?? ""}${o.kept_fsr4 ? " (FSR 4 selectable next to it)" : ""}`
+              ? `Uses ${helixName(o.helix_version, o.upscaler)} as DLSS`
+              : o.upscaler
+              ? `Uses ${helixName(o.helix_version, o.upscaler)} as its FSR upscaler${o.kept_fsr4 ? " (AMD's FSR selectable after it)" : ""}`
+              : `Uses HelixSR ${o.helix_version ?? ""}${ownInstalled ? "'s DLSS network" : ""}${o.kept_fsr4 ? " (FSR 4 selectable next to it)" : ""}`
             : installed
               ? "HelixSR folder present, but OptiScaler.ini no longer points to it (OptiScaler reinstalled?)"
               : "OptiScaler found. Installing HelixSR here means: select DLSS in the game, which gives HelixSR the best input. XeSS or FSR also work if DLSS isn't offered, but can shimmer more."}
@@ -1480,7 +1542,8 @@ function OptiItem({
           </div>
         )}
       </Note>
-      {!ngxActive && !o.configured && o.current_sr_dll && !(o.dx11 && !installed) && (
+      {/* HLX FSR 4 always keeps AMD's FSR next to it: it hands AMD's FSR what it doesn't cover */}
+      {!ngxActive && !active.upscaler && !o.configured && o.current_sr_dll && !(o.dx11 && !installed) && (
         <PanelSectionRow>
           <ToggleField
             label="Keep current FSR selectable"
@@ -1512,12 +1575,43 @@ function OptiItem({
           disabled={!active.ready || busy || !!guard.install}
           onInstall={() => run(() => installOptiscaler(o.dir, !!o.current_sr_dll, true))}
         />
+      ) : !o.configured && hlxRelease && !installed ? (
+        <>
+          <Note>
+            HelixSR {active.version} brings HLX FSR 4: AMD's FSR 4 network on HelixSR's pipeline. HelixSR's own DLSS
+            network comes from HelixSR {own?.version ?? "2.0.0"}
+            {own
+              ? "; either can replace the other here."
+              : `: pick it under Version, download and build it, then pick ${active.version} again to offer it here too.`}{" "}
+            Either way, select DLSS in the game.
+          </Note>
+          {own && (
+            <PanelSectionRow>
+              <ButtonItem
+                layout="below"
+                disabled={busy || !!guard.install}
+                onClick={() => run(() => installOptiscaler(o.dir, true, false, false, own.tag))}
+              >
+                Install HelixSR {own.version} (DLSS network) via OptiScaler
+              </ButtonItem>
+            </PanelSectionRow>
+          )}
+          <PanelSectionRow>
+            <ButtonItem
+              layout="below"
+              disabled={!active.ready || busy || !!guard.install}
+              onClick={() => run(() => installOptiscaler(o.dir, true))}
+            >
+              {active.ready ? `Install HLX FSR 4 ${active.version} via OptiScaler` : notReady(active)}
+            </ButtonItem>
+          </PanelSectionRow>
+        </>
       ) : !o.configured ? (
         <PanelSectionRow>
           <ButtonItem
             layout="below"
             disabled={!active.ready || busy || !!guard.install}
-            onClick={() => run(() => installOptiscaler(o.dir, keepFsr4 && !!o.current_sr_dll))}
+            onClick={() => run(() => installOptiscaler(o.dir, keepFsr4 && !!o.current_sr_dll, false, hlxDlss))}
           >
             {active.ready
               ? installed
@@ -1527,14 +1621,36 @@ function OptiItem({
           </ButtonItem>
         </PanelSectionRow>
       ) : (
-        active.ready &&
-        differs && (
-          <PanelSectionRow>
-            <ButtonItem layout="below" disabled={busy || !!guard.install} onClick={() => run(() => installOptiscaler(o.dir, o.kept_fsr4))}>
-              Switch to HelixSR {active.version}
-              {ngxActive && installed === "ffx" ? " (as DLSS)" : ""}
-            </ButtonItem>
-          </PanelSectionRow>
+        active.ready && (
+          <>
+            {differs && (
+              <PanelSectionRow>
+                <ButtonItem layout="below" disabled={busy || !!guard.install} onClick={() => run(() => installOptiscaler(o.dir, o.kept_fsr4, false, hlxDlss))}>
+                  Switch to {hlxRelease ? helixName(active.version, hlxDlss ? "HLX DLSS" : "HLX FSR 4") : `HelixSR ${active.version}`}
+                  {ngxActive && installed === "ffx" ? " (as DLSS)" : ""}
+                </ButtonItem>
+              </PanelSectionRow>
+            )}
+            {/* 3.0+: HLX FSR 4 or HelixSR's own network (2.0.0), one in place of the other */}
+            {hlxRelease && !official && !o.disabled && (hlxDlss || ownInstalled) && (
+              <PanelSectionRow>
+                <ButtonItem layout="below" disabled={busy || !!guard.install} onClick={() => run(() => installOptiscaler(o.dir, true))}>
+                  Use HLX FSR 4 {active.version} instead
+                </ButtonItem>
+              </PanelSectionRow>
+            )}
+            {own && !official && !o.disabled && !!o.upscaler && (
+              <PanelSectionRow>
+                <ButtonItem
+                  layout="below"
+                  disabled={busy || !!guard.install}
+                  onClick={() => run(() => installOptiscaler(o.dir, true, false, false, own.tag))}
+                >
+                  Use HelixSR {own.version} (DLSS network) instead
+                </ButtonItem>
+              </PanelSectionRow>
+            )}
+          </>
         )
       )}
       {o.configured && !official && !o.disabled && (
@@ -1576,6 +1692,8 @@ function OptiItem({
           <Note>
             {installed === "ngx"
               ? "To compare live: OptiScaler's menu shows DLSS as the upscaler (that's HelixSR); switch to FSR there and back."
+              : o.upscaler
+              ? "To compare live: in OptiScaler's menu, Upscalers → FFX Upscaler lists HLX FSR 4 first and AMD's FSR versions after it; switch there and back."
               : 'To compare live: in OptiScaler\'s menu, Upscalers → FFX Upscaler reads "FSR HelixSR (3.1.5)" when HelixSR is used; switch to XeSS or FSR 4 there and back. A red frame around the picture means HelixSR has no network (build it again).'}
           </Note>
           {details && (
@@ -1598,7 +1716,7 @@ function OptiItem({
               </div>
             </PanelSectionRow>
           )}
-          {!scaler && (
+          {!scaler && o.upscaler !== "HLX FSR 4" && (
             <IniControls
               folder={o.helix_folder}
               ini={o.ini}
@@ -1614,7 +1732,7 @@ function OptiItem({
   );
 }
 
-type Install = { how: "direct" | "opti" | "dlss"; version: string | null; check: Check };
+type Install = { how: "direct" | "opti" | "dlss"; version: string | null; upscaler?: string | null; check: Check };
 
 // What the closed OptiScaler section says: HelixSR's state there, plus how many warnings it holds.
 function optiSummary(items: OptiTarget[]) {
@@ -1627,7 +1745,7 @@ function optiSummary(items: OptiTarget[]) {
         : o.disabled
           ? "HelixSR disabled"
           : o.configured
-            ? `HelixSR ${o.helix_version ?? ""} in use`
+            ? `${helixName(o.helix_version, o.upscaler)} in use`
             : o.dx11 && !o.installed_kind
               ? "Not supported (DirectX 11 game)"
               : o.installed_kind
@@ -1647,7 +1765,8 @@ function optiSummary(items: OptiTarget[]) {
 // Whether a helixsr.log belongs to the current/last game session ("unknown" without session data).
 function freshness(check: Check, session: Session): "current" | "last" | "stale" | "unknown" {
   if (session.running && session.started) return check.mtime && check.mtime >= session.started ? "current" : "stale";
-  if (!session.running && session.last_played) return check.mtime && check.mtime >= session.last_played - 60 ? "last" : "stale";
+  const since = lastSessionStart(session);
+  if (!session.running && since) return check.mtime && check.mtime >= since - 60 ? "last" : "stale";
   return "unknown";
 }
 
@@ -1663,10 +1782,10 @@ function gameStatus(game: GameDetail, active: Active): { color: string; title: s
   const installs: Install[] = [
     ...game.direct
       .filter((t) => t.state === "helixsr" || t.state === "helixsr_no_backup")
-      .map((t) => ({ how: "direct" as const, version: t.helix_version, check: t.check })),
+      .map((t) => ({ how: "direct" as const, version: t.helix_version, upscaler: t.upscaler, check: t.check })),
     ...game.optiscaler
       .filter((o) => o.configured && !o.disabled)
-      .map((o) => ({ how: "opti" as const, version: o.helix_version, check: o.check })),
+      .map((o) => ({ how: "opti" as const, version: o.helix_version, upscaler: o.upscaler, check: o.check })),
     ...game.official_dlss.map((d) => ({ how: "dlss" as const, version: d.helix_version, check: d.check })),
   ];
   if (installs.length === 0) {
@@ -1689,18 +1808,28 @@ function gameStatus(game: GameDetail, active: Active): { color: string; title: s
       : `open "In place of the game's FSR 3.1" and press "Install HelixSR ${active.version} here"`;
     return { color: GREY, title: "HelixSR isn't installed in this game", detail: `To install it, ${where} below.` };
   }
-  // the install the game used last (newest log), else the first
-  const i = [...installs].sort((a, b) => (b.check.mtime ?? 0) - (a.check.mtime ?? 0))[0];
-  const v = i.version ? `HelixSR ${i.version}` : "HelixSR";
+  // the install the game used last (newest log), else the one with the selected release (not an older leftover), else
+  // the first
+  const current = (x: Install) => (active.version && x.version === active.version ? 1 : 0);
+  const i = [...installs].sort((a, b) => (b.check.mtime ?? 0) - (a.check.mtime ?? 0) || current(b) - current(a))[0];
+  const v = i.version ? helixName(i.version, i.upscaler) : "HelixSR";
   const pick = SELECT_TEXT[i.how];
+  const chosenOwnNet = !!active.own_net && !i.upscaler && i.version === active.own_net.version;
   const extra =
-    active.ready && active.version && i.version && i.version !== active.version
+    active.ready && active.version && i.version && i.version !== active.version && !chosenOwnNet
       ? `This game has ${v}; ${active.version} is selected above. "Switch to HelixSR ${active.version}" below replaces it, no cleanup needed.`
       : undefined;
   const fresh = freshness(i.check, game.session);
   const u = i.check.last_upscale;
+  if (i.check.status === "error" && i.upscaler) {
+    // HLX FSR 4 doesn't show a red frame: AMD's own FSR runs instead, and its log says why
+    return { color: RED, title: "Installed, but HLX FSR 4 can't upscale", detail: `AMD's own FSR runs instead. Its log says why (Show technical details); if it says the shaders aren't built, build HelixSR above and install it here again.`, extra };
+  }
   if (i.check.status === "error") {
     return { color: RED, title: "Installed, but HelixSR can't upscale", detail: `${v} here has no built network (red frame in the game). Build HelixSR above, then install it here again.`, extra };
+  }
+  if (i.check.status === "fallback" && fresh !== "stale") {
+    return { color: YELLOW, title: "Installed, AMD's FSR stepped in", detail: `HLX FSR 4 handed some upscaling to AMD's own FSR (a request it doesn't cover). Its log lines are under "Show technical details".`, extra };
   }
   if (i.check.status === "running" && fresh !== "stale") {
     const when = fresh === "current" ? "in the current game session" : fresh === "last" ? "in the last game session" : "";
@@ -2167,6 +2296,9 @@ function Content() {
             tag: helix?.active ?? null,
             version: helix?.version ?? null,
             kind: helix?.kind ?? null,
+            upscaler: helix?.upscaler ?? null,
+            dlss_built: helix?.dlss_built ?? false,
+            own_net: helix?.upscaler ? ownNetworkRelease(helix?.versions) : null,
           }}
           onRemoved={scan}
         />

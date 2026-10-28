@@ -2,8 +2,10 @@
 
 A Decky Loader plugin for the Steam Deck that installs [HelixSR](https://github.com/lonewolf0622/HelixSR) into your
 games, per game, and checks that it actually runs. HelixSR runs NVIDIA's DLSS upscaling network on AMD GPUs like the
-Deck's. This plugin contains no HelixSR files and no NVIDIA files: it downloads the official HelixSR release from
-GitHub and runs HelixSR's own setup, which builds the network locally on your Deck.
+Deck's. From 3.0, HelixSR's releases put **HLX FSR 4** (AMD's FSR 4 network on HelixSR's pipeline) into games instead;
+the plugin installs that and offers HelixSR 2.0.0's DLSS network next to it. This plugin contains no HelixSR, NVIDIA or
+AMD files: it downloads the official HelixSR release from GitHub and runs HelixSR's own setup, which builds everything
+locally on your Deck.
 
 HelixSR is developed by [lonewolf0622](https://github.com/lonewolf0622/HelixSR). This plugin is an independent
 integration, not affiliated with HelixSR, NVIDIA, AMD, OptiScaler or Decky.
@@ -20,7 +22,8 @@ OptiScaler.
 - **Any HelixSR release:** pick a release from GitHub, download it (verified against GitHub's SHA256 checksum, with a
   notice if the author later replaces the zip) and build it with a progress bar. Several releases can sit side by side.
 - **Per game, two routes:** in place of a game's own FSR 3.1, or through the OptiScaler the game already has (for
-  example from Decky Framegen), keeping your current FSR 4 selectable for comparison.
+  example from Decky Framegen), keeping your current FSR 4 selectable for comparison. With HelixSR 3.x, the OptiScaler
+  section offers HLX FSR 4 and HelixSR 2.0.0's DLSS network; one button swaps one for the other.
 - **Games from other stores (opt-in):** Unifideck, Heroic (GOG, Amazon, Epic), Legendary, Lutris and games added to
   Steam by hand, each switched on in **Other Stores**, plus **Add game folder** for anything else. Only the folders the
   stores name are read, so the game list stays fast.
@@ -60,6 +63,15 @@ OptiScaler.
 > that setup, including 1.8.1's experimental "DLSS without OptiScaler" route (HelixSR's loader as `dxgi.dll` and
 > HelixSR as `nvngx.dll` next to the game's exe), which the plugin doesn't offer itself. A setup whose layout the plugin
 > doesn't recognize isn't run.
+>
+> **From 3.0** (tested with 3.1.0), the DLL a release puts into games is **HLX FSR 4**: AMD's FSR 4 network on
+> HelixSR's pipeline, as `HLX-FSR4/amd_fidelityfx_upscaler_dx12.dll`. Its setup builds HLX FSR 4's shaders from AMD's
+> FSR 4 driver file, but downloads that file only after a yes on a terminal. So the plugin runs the setup as before
+> (still never with `--yes`), then a second step: the release's `helixsr_setup.py --fg-only --no-fg --yes`, which only
+> downloads and builds and never starts the game installer. HelixSR 3.x's own DLSS network (HLX DLSS,
+> `HelixSR/helixsr.dll`) is made for HelixSR Scaler. In a game's own OptiScaler (0.10) it doesn't run: OptiScaler
+> decides once, early, that the Deck's GPU can't do DLSS and quietly uses its FSR 2.1.2 instead. So the plugin doesn't
+> offer HLX DLSS; it offers HelixSR 2.0.0's network next to HLX FSR 4 instead.
 
 ## Installation
 
@@ -88,7 +100,9 @@ The **HelixSR Installation** section shows three numbered steps and only the but
 3. Press **Build HelixSR …** and confirm. HelixSR's setup downloads NVIDIA's DLSS 310.7.0 DLL, a portable
    Python with numpy and Microsoft's shader compiler, builds HelixSR's network (into HelixSR's DLL from 1.8, as two
    separate files before) and deletes NVIDIA's DLL again. From 1.7 on, only the build part of HelixSR's setup runs:
-   its own game installer never starts, and the plugin installs per game in the next step.
+   its own game installer never starts, and the plugin installs per game in the next step. From 3.0, a second step
+   then builds HLX FSR 4: it downloads about 420 MB of AMD's driver package from AMD, reads only its FSR 4 file and
+   installs nothing. This adds several minutes.
 4. Wait for it to finish: **about 7-10 minutes on a Steam Deck OLED** (the first run includes the one-time downloads;
    later releases reuse Python and the compiler). Keep the Deck plugged in and don't let it sleep, since sleep pauses
    the setup. You can close the menu meanwhile; the progress bar picks up where it is when you reopen it.
@@ -96,6 +110,9 @@ The **HelixSR Installation** section shows three numbered steps and only the but
 
 **Updating later:** pick the newer version, download and build it, then press **Switch to HelixSR …** in each game. It
 replaces the old version in that game; no cleanup is needed first.
+
+**HelixSR 3.x and 2.0.0 side by side:** to have HelixSR's DLSS network next to HLX FSR 4, also download and build
+2.0.0 (pick it under **Version**), then pick the 3.x release again. Games then get either one from the same section.
 
 ### 3. Install HelixSR into a game
 
@@ -109,19 +126,30 @@ Close the game first: the plugin refuses to change its files while it runs or wh
 updating it. If the game ships anti-cheat (EasyAntiCheat, BattlEye, …), the plugin warns that online play could get
 your account banned and only installs after you turn on **I understand the risk** for that game.
 
-- **Game with OptiScaler (HelixSR 1.7, 1.8 or 1.4):** in the **OptiScaler** section press **Install HelixSR …
+- **Game with OptiScaler (HelixSR 1.4 or 1.7 to 2.0):** in the **OptiScaler** section press **Install HelixSR …
   via OptiScaler**. Leave **Keep current FSR selectable** on to keep your FSR 4 available for comparison. In the game,
   select DLSS: it gives HelixSR the best input. XeSS or FSR also work in games without DLSS, but can shimmer more. Then
   open OptiScaler's menu and pick **FSR HelixSR (3.1.5)** under Upscalers → FFX Upscaler. OptiScaler's menu opens with
   Insert by default, which the Deck doesn't have: map it to a back button in the game's controller layout (the plugin
   shows the key the game's `OptiScaler.ini` uses).
   `Dx12Upscaler` is set to what the game's OptiScaler expects (`fsr31` on OptiScaler 0.9.4).
-- **Game that ships FSR 3.1 itself (HelixSR 1.4, 1.7 or 1.8):** in **In place of the game's FSR 3.1** press **Install
+- **Game with OptiScaler (HelixSR 3.x):** the **OptiScaler** section has two buttons:
+  - **Install HLX FSR 4 … via OptiScaler**. OptiScaler's menu then lists "HLX FSR 4" first under Upscalers → FFX
+    Upscaler, with AMD's own FSR after it, for comparing. HLX FSR 4 hands AMD's FSR anything it doesn't cover itself.
+  - **Install HelixSR 2.0.0 (DLSS network) via OptiScaler**, once 2.0.0 is downloaded and built (otherwise the section
+    says how to get it).
+
+  Either one replaces the other with **Use … instead**. In the game, select DLSS (XeSS or FSR also work).
+- **Game that ships FSR 3.1 itself (HelixSR 1.4, 1.7 or later):** in **In place of the game's FSR 3.1** press **Install
   HelixSR … here**, then select AMD FSR as the upscaler in the game's settings. This needs no OptiScaler. A game that
-  offers both sections works either way (HelixSR 1.8's own setup prefers this one).
+  offers both sections works either way (HelixSR 1.8's own setup prefers this one). With 3.x this installs HLX FSR 4;
+  the game's own FSR stays next to it, and HLX FSR 4 hands it anything it doesn't cover.
 - **HelixSR 1.5.x (withdrawn upstream; only if you still have it):** in the **OptiScaler** section press **Install HelixSR
-  … via OptiScaler (as DLSS)**, then **Add launch option**: it adds `PROTON_FORCE_NVAPI=1 DXVK_NVAPI_GPU_ARCH=AD100` in
-  front of the game's existing launch options (e.g. Decky Framegen's stay as they are). In the game, select **DLSS**.
+  … via OptiScaler (as DLSS)**, then **Add launch option**: it adds
+  `PROTON_FORCE_NVAPI=1 DXVK_NVAPI_GPU_ARCH=AD100 DXVK_NVAPI_ALLOW_OTHER_DRIVERS=1` in front of the game's existing
+  launch options (e.g. Decky Framegen's stay as they are). In the game, select **DLSS**. The last variable lets NVIDIA's
+  API layer start on the Deck's AMD GPU; without it, OptiScaler 0.10 decides the GPU can't do DLSS and quietly uses
+  FSR 2.1.2 instead (an option added by an older version of the plugin is offered again).
 
 Switching a game between releases is one button; the plugin undoes the other setup first. Under the OptiScaler section
 the plugin also points out settings that commonly get in the way (DLSS input off, GPU spoofing off, an overlay setting
@@ -136,6 +164,10 @@ plain words:
 - **Installed, not used yet** / **waiting for the game** / **not used last time**: HelixSR didn't upscale; the line says
   what to select in the game (DLSS through OptiScaler, AMD FSR for a game's own FSR 3.1).
 - **Installed, but HelixSR can't upscale** (red, also a red frame in the game): that copy has no built network.
+- With HLX FSR 4: **Installed, AMD's FSR stepped in** (HLX FSR 4 handed some upscaling to AMD's own FSR) or
+  **Installed, but HLX FSR 4 can't upscale** (AMD's own FSR runs instead, for example because the shaders aren't
+  built). HLX FSR 4 shows no red frame. It logs to `HLX_FSR.log` next to it, or to `OptiScaler.log` when it runs
+  inside OptiScaler; the plugin reads either.
 
 **Show technical details** adds what HelixSR logged, the log's time and session, and OptiScaler's log lines.
 
@@ -145,7 +177,8 @@ restart it. HelixSR then falls back to a simple, blurry placeholder upscale: if 
 active upscaler; if it looks the same, a different upscaler is selected. Turn the network back on afterwards. The switch
 only takes effect when the game starts (from 1.5 on it's undocumented upstream, so treat it as experimental). For a
 live side-by-side comparison, switch between "FSR HelixSR (3.1.5)" and FSR 3.1.5 / FSR 4 in OptiScaler's menu
-(Upscalers → FFX Upscaler); an entry named just "FSR 3.1.5" is AMD's FSR 3.1, not HelixSR.
+(Upscalers → FFX Upscaler); an entry named just "FSR 3.1.5" is AMD's FSR 3.1, not HelixSR. HLX FSR 4 has no network
+switch: compare it with AMD's FSR in that same list.
 
 ### 5. Settings, disable and undo
 
@@ -154,7 +187,7 @@ live side-by-side comparison, switch between "FSR HelixSR (3.1.5)" and FSR 3.1.5
   in 1.9.x and 0.5 from 2.0.
 - **Int8 network (Speed Boost):** Auto, On or Off where the release reads it (1.9.0's pre-release, 1.9.3 and newer);
   the 1.9.0 release picks it automatically. Up to 1.4: the release's sharpening mode and network resolution.
-  Changes take effect after restarting the game.
+  Changes take effect after restarting the game. HLX FSR 4 has no settings.
 - **Disable** switches the game back to its own FSR (or OptiScaler's previous upscaler) and keeps HelixSR's files;
   **Enable HelixSR again** switches back without downloading or building anything.
 - **Undo completely:** **Revert OptiScaler to previous upscaler** or **Restore the game's FSR** (plus **Remove HelixSR
@@ -192,12 +225,14 @@ applies to Steam games.
    be changed) and needs its one-time setup (`helixsr-setup.sh --yes`, about 7-10 minutes on a Steam Deck OLED; downloads NVIDIA's DLSS
    310.7.0 DLL after you confirm, builds the network, deletes NVIDIA's DLL). Several releases can sit side by side;
    switching a game to another one is one button. Releases before 1.4.0 keep the network in
-   `helixsr_weights.bin`/`helixsr_kernels.pak`, which are copied along with the DLL.
+   `helixsr_weights.bin`/`helixsr_kernels.pak`, which are copied along with the DLL. From 3.0, a second step builds
+   HLX FSR 4's shaders into its DLL (`helixsr_setup.py --fg-only --no-fg --yes`, after the setup's own run).
 2. **Game list**: every installed Steam game from all libraries (SD card too), optionally filtered to games that ship
    an FSR 3.1 DLL or have OptiScaler.
 3. **Replace FSR 3.1 directly**: renames the game's `amd_fidelityfx_upscaler_dx12.dll` (or `amd_fidelityfx_dx12.dll`)
    to `*.original.dll` and puts HelixSR in its place, plus `helixsr.ini`. Same files and `helixsr-install.json` marker
-   as the official `helixsr-install.sh`, so either tool can undo the other's install.
+   as the official `helixsr-install.sh`, so either tool can undo the other's install. HLX FSR 4 (3.x) goes in the same
+   way, without `helixsr.ini`, and lists the game's kept FSR after itself.
 4. **OptiScaler**: creates a `HelixSR` folder next to `OptiScaler.ini` with HelixSR as both
    `amd_fidelityfx_dx12.dll` and `amd_fidelityfx_upscaler_dx12.dll`, and sets in `OptiScaler.ini`:
    `Dx12Upscaler` (`ffx` on OptiScaler 0.9+, `fsr31` on older versions), `FfxDx12Path`, `FfxDx12SRPath` (as `Z:\…`
@@ -207,7 +242,10 @@ next to HelixSR, since HelixSR has none of its own; OptiScaler's own frame gener
 **Keep current FSR selectable**, the FSR 4 DLL OptiScaler used so far is copied
    in as `amd_fidelityfx_upscaler_dx12.amd.dll` and set as HelixSR's `[Forwarding] UpscalerDll`, so FSR 4 stays in
    OptiScaler's FFX Upscaler list for comparison. The previous `amd_fidelityfx_dx12.dll` is copied in as
-   `amd_fidelityfx_dx12.original.dll` so frame generation keeps working.
+   `amd_fidelityfx_dx12.original.dll` so frame generation keeps working. HLX FSR 4 (3.x) is only an upscaler: it
+   goes in as `amd_fidelityfx_upscaler_dx12.dll` (`FfxDx12SRPath`), `FfxDx12Path` stays the game's, and AMD's FSR is
+   always copied in as `amd_fidelityfx_upscaler_dx12.amd.dll`, which HLX FSR 4 lists after itself. HelixSR 2.0.0 next
+   to a 3.x release is installed exactly like 2.0.0 on its own.
 5. **Setup progress**: while the setup runs, a progress bar with the current step (in step 5 the compiled shaders,
    e.g. 41/72), the elapsed time, whether it is actually working (CPU use of its processes) and what runs right now.
    HelixSR's steps print nothing while they work, so the log alone can stay unchanged for minutes. The setup keeps
@@ -218,7 +256,9 @@ next to HelixSR, since HelixSR has none of its own; OptiScaler's own frame gener
    (`~/.local/share/HelixSR`) and temporary files. Games keep their installed copy. Only files recognizably
    HelixSR's are removed from the HelixSR folder.
 7. **Check**: reads `helixsr.log` (network running / not running / loaded but idle, wave size, network resolution) and,
-   if enabled, OptiScaler.log lines about HelixSR/FFX.
+   if enabled, OptiScaler.log lines about HelixSR/FFX. For HLX FSR 4 it reads `HLX_FSR.log`, or its lines in
+   `OptiScaler.log`. Whether a log is from the last game session is judged by the session's start in Steam's
+   `logs/gameprocess_log.txt` (Steam's `LastPlayed` is written again when the game quits).
 8. **Settings**: the DLSS network on/off test switch, `NetworkResolution` and sharpening per install. The
    `NetworkResolution` choices come from the installed release's own `helixsr.ini`, since they differ between
    releases (1.4.3 is HelixSR 1.3.0 again: auto/fast/full; 1.4.0-1.4.2: auto/full/QSSM/PRSM). 1.5+ has no settings
@@ -289,8 +329,9 @@ sed -i 's/wine_get_version/frog_get_version/' witcher3.exe
 cmp -l witcher3.exe.orig witcher3.exe | wc -l                  # must print 8; otherwise restore the backup
 ```
 
-Then select DLSS in the game and HelixSR 3.1.5 in OptiScaler's menu (FSR 3.X/4). A game update or Steam's "Verify
-integrity of game files" restores the original exe, so repeat it after either. To undo: `mv witcher3.exe.orig witcher3.exe`.
+Then select DLSS in the game and HelixSR 3.1.5 (or HLX FSR 4 with HelixSR 3.x) in OptiScaler's menu (FSR 3.X/4).
+A game update or Steam's "Verify integrity of game files" restores the original exe, so repeat it after either. To
+undo: `mv witcher3.exe.orig witcher3.exe`.
 
 With Wine hidden, the game also changes how it uses DirectX 12, so it depends on the device and Proton version:
 
