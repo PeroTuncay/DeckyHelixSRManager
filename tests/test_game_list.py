@@ -92,3 +92,19 @@ class LastSessionStartTest(FakeHomeTest):
             self.assertEqual(main.last_session_start(8), self.at("2026-10-02 10:00:00"))
         finally:
             main.GAMEPROCESS_TAIL = old
+
+
+class SteamBusyTest(FakeHomeTest):
+    """StateFlags is a bit field: a queued update (6) left every button greyed out on a Deck although Steam wrote
+    nothing; only the bits for an install, update or validation in progress block changes."""
+
+    def busy(self, state):
+        return main.steam_busy({"appid": "292030", "state": state})
+
+    def test_installed_and_queued_updates_are_not_busy(self):
+        for state in (None, 4, 6):
+            self.assertIsNone(self.busy(state), state)
+
+    def test_running_updates_and_missing_installs_are_busy(self):
+        for state in (2, 1026, 4 | 256, 4 | 2 | 1048576, 4 | 131072, 4 | 2 | 512 | 1024):
+            self.assertIsNotNone(self.busy(state), state)
