@@ -177,6 +177,34 @@ def dlss_download(release):
     return url.group(1), sha.group(1)
 
 
+def hlx_amd_download(release):
+    """3.0+: whether building HLX FSR 4 downloads AMD's driver package (~420 MB). From 3.2.0 the release ships HLX FSR 4
+    built and AMD's FSR SDK upscaler DLL, which the setup rebuilds from instead (its SHA256 is SDK_SHA256 in the
+    release's amd.py, checked the same way here)."""
+    d = Path(release)
+    try:
+        text = (d / "setup" / "hlxfsr4" / "hlx" / "amd.py").read_text(errors="replace")
+    except OSError:
+        return False
+    sha = re.search(r"^SDK_SHA256\s*=\s*'([0-9a-f]{64})'", text, re.M)
+    for p in (d / "helixsr-scaler" / "OptiScaler" / FSR4_COPY_NAME, d / HLX_DIR / FSR4_COPY_NAME):
+        if sha and p.is_file() and cached_sha256(p) == sha.group(1):
+            return False
+    return True
+
+
+_SHA_CACHE = {}
+
+
+def cached_sha256(p):
+    """sha256_file, kept per path while size and mtime stay (the panel lists releases often; AMD's DLL is ~58 MB)."""
+    s = p.stat()
+    key = (str(p), s.st_size, s.st_mtime_ns)
+    if key not in _SHA_CACHE:
+        _SHA_CACHE[key] = sha256_file(p)
+    return _SHA_CACHE[key]
+
+
 def dll_kind(dll):
     return "ngx" if Path(dll).name.lower() == DLL_NGX else "ffx"
 
@@ -201,6 +229,8 @@ def local_versions():
                         "built": has_network(dll), "setup_script": (d / "helixsr-setup.sh").exists(),
                         # 3.0+: HLX DLSS built (the setup builds it before HLX FSR 4, so it can be ready alone)
                         "dlss_built": bool(release_ngx_dll(d)) and has_network(release_ngx_dll(d)),
+                        # 3.0-3.1: building HLX FSR 4 downloads AMD's driver package (3.2.0+ ships it built)
+                        "amd_download": bool(upscaler_name(dll)) and hlx_amd_download(d),
                         "verified": bool(meta.get("verified")),
                         # the zip on GitHub is no longer the one downloaded (re-uploaded under the same version)
                         "replaced_upstream": bool(now and meta.get("sha256") and now != meta["sha256"])})
@@ -2304,7 +2334,7 @@ WINE=$(sed -n 's/.*exec "\([^"]*\)" "[^"]*dxc\.exe".*/\1/p' "$WRAP" 2>/dev/null 
 [ -n "$WINE" ] || { echo "[decky] HLX FSR 4 was not built: the setup's shader compiler wasn't found"; exit 4; }
 ARGS=(--fg-only --no-fg --yes --dxc "$WRAP" --dxc-dir "$DATA/dxc-win/bin/x64" --wine "$WINE" --wineprefix "$DATA/wineprefix")
 [ -f "$DATA/dxc-win-2609/bin/x64/dxc.exe" ] && ARGS+=(--dxc2609-dir "$DATA/dxc-win-2609/bin/x64")
-echo "@LINE@ (AMD's FSR 4 driver file, about 420 MB from AMD)"
+echo "@LINE@ (from AMD's FSR 4 file)"
 "$PY" "$SETUP" "$REL" "${ARGS[@]}"; r=$?
 rm -rf "$DATA/wineprefix"
 exit $r

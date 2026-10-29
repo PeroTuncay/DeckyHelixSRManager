@@ -64,11 +64,12 @@ OptiScaler.
 > HelixSR as `nvngx.dll` next to the game's exe), which the plugin doesn't offer itself. A setup whose layout the plugin
 > doesn't recognize isn't run.
 >
-> **From 3.0** (tested with 3.1.0), the DLL a release puts into games is **HLX FSR 4**: AMD's FSR 4 network on
+> **From 3.0** (tested with 3.1.0; 3.2.0 checked), the DLL a release puts into games is **HLX FSR 4**: AMD's FSR 4 network on
 > HelixSR's pipeline, as `HLX-FSR4/amd_fidelityfx_upscaler_dx12.dll`. Its setup builds HLX FSR 4's shaders from AMD's
 > FSR 4 driver file, but downloads that file only after a yes on a terminal. So the plugin runs the setup as before
 > (still never with `--yes`), then a second step: the release's `helixsr_setup.py --fg-only --no-fg --yes`, which only
-> downloads and builds and never starts the game installer. HelixSR 3.x's own DLSS network (HLX DLSS,
+> downloads and builds and never starts the game installer. **From 3.2.0** the zip ships HLX FSR 4 built, so the
+> release is ready right after the download and the second step has nothing to do. HelixSR 3.x's own DLSS network (HLX DLSS,
 > `HelixSR/helixsr.dll`) is made for HelixSR Scaler. In a game's own OptiScaler (0.10) it doesn't run: OptiScaler
 > decides once, early, that the Deck's GPU can't do DLSS and quietly uses its FSR 2.1.2 instead. So the plugin doesn't
 > offer HLX DLSS; it offers HelixSR 2.0.0's network next to HLX FSR 4 instead.
@@ -102,7 +103,8 @@ The **HelixSR Installation** section shows three numbered steps and only the but
    separate files before) and deletes NVIDIA's DLL again. From 1.7 on, only the build part of HelixSR's setup runs:
    its own game installer never starts, and the plugin installs per game in the next step. From 3.0, a second step
    then builds HLX FSR 4: it downloads about 420 MB of AMD's driver package from AMD, reads only its FSR 4 file and
-   installs nothing. This adds several minutes.
+   installs nothing. This adds several minutes. From 3.2.0, HLX FSR 4 comes built: the release shows **✓ ready**
+   after the download and needs no build (a rebuild makes it from AMD's FSR SDK file in the zip, no AMD download).
 4. Wait for it to finish: **about 7-10 minutes on a Steam Deck OLED** (the first run includes the one-time downloads;
    later releases reuse Python and the compiler). Keep the Deck plugged in and don't let it sleep, since sleep pauses
    the setup. You can close the menu meanwhile; the progress bar picks up where it is when you reopen it.
