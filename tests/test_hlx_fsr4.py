@@ -53,6 +53,19 @@ class Release300Test(FakeHomeTest):
         v = next(v for v in main.local_versions() if v["tag"] == "v3.0.0")
         self.assertEqual((v["version"], v["built"], v["upscaler"]), ("3.0.0", True, "HLX FSR 4"))
 
+    def test_amd_download_until_the_release_ships_amds_sdk_dll(self):
+        # 3.0/3.1: HLX FSR 4 is built from AMD's driver package (downloaded); 3.2.0 ships it built plus AMD's FSR SDK
+        # DLL, named by SDK_SHA256 in amd.py, which a rebuild uses instead
+        d = release()
+        self.assertTrue(main.hlx_amd_download(d))
+        sdk = write(d / "helixsr-scaler/OptiScaler/amd_fidelityfx_upscaler_dx12.amd.dll", b"MZ sdk")
+        self.assertTrue(main.hlx_amd_download(d))   # amd.py doesn't name the SDK DLL (3.1.0)
+        write(d / "setup/hlxfsr4/hlx/amd.py", f"SDK_SHA256 = '{hashlib.sha256(b'MZ sdk').hexdigest()}'\n")
+        self.assertFalse(main.hlx_amd_download(d))
+        write(sdk, b"MZ other")
+        self.assertTrue(main.hlx_amd_download(d))   # another file under that name
+        self.assertFalse(main.hlx_amd_download(HOME / "HelixSR/v2.0.0"))
+
     def test_second_step_only_for_releases_with_hlx_fsr4(self):
         self.assertIsNotNone(main.hlx_step_script(release()))
         d = HOME / "HelixSR/v2.0.0"
@@ -195,7 +208,7 @@ class LogTest(FakeHomeTest):
 class SetupProgressTest(FakeHomeTest):
     def test_second_step_progress(self):
         lines = ["[helixsr-setup] done: /x/HelixSR/helixsr.dll now carries the network (72 shaders, 7.5 MB, checked on disk)",
-                 main.HLX_STEP_LINE + " (AMD's FSR 4 driver file, about 420 MB from AMD)",
+                 main.HLX_STEP_LINE + " (from AMD's FSR 4 file)",
                  "[helixsr-setup] [##########----------]  50%  0:30  HLX FSR 4 shaders"]
         pct, label = main.phase_of(lines)
         self.assertEqual(pct, 60 + 19)

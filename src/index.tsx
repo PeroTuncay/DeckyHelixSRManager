@@ -32,6 +32,7 @@ type LocalVersion = {
   upscaler: string | null; // "HLX FSR 4": 3.0+ puts HLX FSR 4 into games, not HelixSR's own network
   built: boolean;
   dlss_built: boolean; // 3.0+: HLX DLSS built too
+  amd_download?: boolean; // 3.0-3.1: building HLX FSR 4 downloads AMD's driver package (3.2.0+ ships it built)
   setup_script: boolean;
   verified?: boolean; // the download matched GitHub's SHA256
   replaced_upstream?: boolean; // the zip on GitHub changed since it was downloaded
@@ -857,11 +858,13 @@ function HelixSection({ state, refresh }: { state: HelixState | null; refresh: (
           "NVIDIA's GitHub (NVIDIA's license applies; checked against the checksum HelixSR names), plus a portable " +
           "Python and Microsoft's shader compiler; HelixSR's setup builds the network into the HelixSR DLL and NVIDIA's " +
           "DLL is deleted again. " +
-          (local.get(tag)?.upscaler
+          (local.get(tag)?.amd_download
             ? "Then HLX FSR 4 is built (what games get from this release): about 420 MB of AMD's driver package " +
               "(AMD Software 26.10.1) are downloaded from AMD (AMD's license applies), only its FSR 4 file is read and " +
               "checked, nothing is installed. This adds several minutes. "
-            : "") +
+            : local.get(tag)?.upscaler
+              ? "HLX FSR 4 (what games get from this release) comes built with it. "
+              : "") +
           "HelixSR's own game installer is never answered, so it changes no game. The result is for this device only, " +
           "don't share it."
         }
