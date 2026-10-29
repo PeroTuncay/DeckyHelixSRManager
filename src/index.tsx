@@ -180,6 +180,17 @@ function versionAtLeast(v: string | null | undefined, major: number, minor: numb
   return !!m && (Number(m[1]) > major || (Number(m[1]) === major && Number(m[2]) >= minor));
 }
 
+// a newer than b by their x.y.z numbers ("v3.1.0" vs "v3.2.0"); false when either has none (e.g. "local")
+function versionNewer(a: string | null | undefined, b: string | null | undefined) {
+  const nums = (v: string | null | undefined) => (v ?? "").match(/\d+(\.\d+)*/)?.[0].split(".").map(Number);
+  const x = nums(a), y = nums(b);
+  if (!x || !y) return false;
+  for (let i = 0; i < Math.max(x.length, y.length); i++) {
+    if ((x[i] ?? 0) !== (y[i] ?? 0)) return (x[i] ?? 0) > (y[i] ?? 0);
+  }
+  return false;
+}
+
 // Only 1.5.x and 1.6.x were the DLSS (NGX) route; 1.7 went back to replacing FSR 3.1. Before a release is downloaded,
 // its tag is all there is to go by.
 function isNgxRelease(tag: string | null, local?: LocalVersion) {
@@ -920,7 +931,7 @@ function HelixSection({ state, refresh }: { state: HelixState | null; refresh: (
           {step === 3 && (
             <div style={{ color: GREEN, marginTop: 4 }}>HelixSR {version} is ready to install.</div>
           )}
-          {latest && tag !== latest && <div style={{ color: YELLOW, marginTop: 4 }}>Newer version available: {latest}</div>}
+          {latest && versionNewer(latest, tag === "local" ? version : tag) && <div style={{ color: YELLOW, marginTop: 4 }}>Newer version available: {latest}</div>}
           {local.get(tag)?.replaced_upstream && (
             <div style={{ color: YELLOW, marginTop: 4 }}>
               The author replaced this version's files on GitHub since you downloaded it. Download it again (More

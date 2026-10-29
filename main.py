@@ -1072,9 +1072,16 @@ def last_session_start(appid):
     return best
 
 
+# Steam's StateFlags bits that mean it is writing the game's files: update running/started, uninstalling,
+# reconfiguring, validating, adding files, preallocating, downloading, staging, committing, stopping an update
+STEAM_WRITING = 256 | 1024 | 2048 | 65536 | 131072 | 262144 | 524288 | 1048576 | 2097152 | 4194304 | 8388608
+
+
 def steam_busy(game):
-    """Why Steam may still be writing this game's files, or None (StateFlags 4 = fully installed)."""
-    if game.get("state") not in (None, 4):
+    """Why Steam may still be writing this game's files, or None. StateFlags is a bit field: 4 = fully installed;
+    an update that is only queued (2, e.g. 6) writes nothing and doesn't count; one Steam started still does."""
+    state = game.get("state")
+    if state is not None and (not state & 4 or state & STEAM_WRITING):
         return "Steam is still installing or updating this game. Wait until it's done."
     dl = Path(game.get("steamapps") or "") / "downloading" / str(game.get("appid"))
     try:
