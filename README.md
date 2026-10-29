@@ -320,8 +320,19 @@ The game (5.0, DirectX 12) refuses DLSS when it detects Wine: it looks for `wine
 NVIDIA Streamline. OptiScaler's GPU spoofing doesn't help. Without DLSS, select XeSS or FSR in the game; HelixSR works
 through those too, but they can shimmer more.
 
-The fix renames that text in `witcher3.exe` ([source](https://gist.github.com/gabrielmaialva33/33ebb2542f0513d55100b22aa2149ff5)).
-With the game closed, in Desktop Mode (Konsole):
+There are two ways around it. Select DLSS in the game afterwards, and HelixSR 3.1.5 (or HLX FSR 4 with HelixSR 3.x)
+in OptiScaler's menu (FSR 3.X/4).
+
+**1. proton-wineland (easiest, no file changes).** This Proton build hides Wine from `witcher3.exe` by itself, so the
+game files stay as they are and game updates don't undo it. In Desktop Mode, open
+[ProtonUp-Qt](https://davidotek.github.io/protonup-qt/) (2.16 or newer), choose **Add version**, pick
+**proton-wineland** and its newest version, and install it for Steam. Back in Game Mode (or after restarting Steam), set
+it under the game's **Properties → Compatibility**. Don't combine it with the exe change below; if you made that
+change before, restore the original exe first (or let Steam's "Verify integrity of game files" do it).
+
+**2. Change the exe.** With other Proton versions, rename that text in `witcher3.exe`
+([source](https://gist.github.com/gabrielmaialva33/33ebb2542f0513d55100b22aa2149ff5)). With the game closed, in
+Desktop Mode (Konsole):
 
 ```sh
 cd "$HOME/.local/share/Steam/steamapps/common/The Witcher 3/bin/x64_dx12"   # or the game's folder on another drive
@@ -331,7 +342,6 @@ sed -i 's/wine_get_version/frog_get_version/' witcher3.exe
 cmp -l witcher3.exe.orig witcher3.exe | wc -l                  # must print 8; otherwise restore the backup
 ```
 
-Then select DLSS in the game and HelixSR 3.1.5 (or HLX FSR 4 with HelixSR 3.x) in OptiScaler's menu (FSR 3.X/4).
 A game update or Steam's "Verify integrity of game files" restores the original exe, so repeat it after either. To
 undo: `mv witcher3.exe.orig witcher3.exe`.
 
@@ -339,11 +349,10 @@ With Wine hidden, the game also changes how it uses DirectX 12, so it depends on
 
 | Device | Works with |
 |---|---|
-| Steam Deck OLED (SteamOS) | Proton 11.0-2e |
-| ROG Ally Z1 Extreme (Bazzite, Mesa 25.2) | Proton Experimental 11.0-20261001 plus `VKD3D_CONFIG=nodxr` in the launch options (turns off the game's ray tracing). On 11.0-2e it crashes at startup. |
+| Steam Deck OLED (SteamOS) | proton-wineland 11.0 (no exe change), or Proton 11.0-2e with the changed exe |
+| ROG Ally Z1 Extreme (Bazzite, Mesa 25.2) | Proton Experimental 11.0-20261001 with the changed exe, plus `VKD3D_CONFIG=nodxr` in the launch options (turns off the game's ray tracing). On 11.0-2e it crashes at startup. proton-wineland not tried yet. |
 
-If the game doesn't start after the fix, restore the original exe and try another Proton version. proton-cachyos
-"Wineland" 11.0-20260930 or newer hides Wine for this game by itself, without changing the exe.
+If the game doesn't start, try another Proton version (with the exe change: restore the original exe first).
 
 ## License
 
