@@ -33,6 +33,7 @@ type LocalVersion = {
   built: boolean;
   dlss_built: boolean; // 3.0+: HLX DLSS built too
   full?: boolean; // 3.2.1+: comes with HLX FSR 4 Full (for OptiScaler)
+  scaler?: boolean; // 3.0+: can put HelixSR Scaler into games without OptiScaler (HelixSR's own installer)
   amd_download?: boolean; // 3.0-3.1: building HLX FSR 4 downloads AMD's driver package (3.2.0+ ships it built)
   setup_script: boolean;
   verified?: boolean; // the download matched GitHub's SHA256
@@ -62,6 +63,7 @@ type HelixState = {
   upscaler: string | null;
   dlss_built: boolean;
   full: boolean;
+  scaler: boolean;
 };
 
 type SetupStatus = {
@@ -86,6 +88,7 @@ type SetupStatus = {
 type Diagnostic = { name: string; ok: boolean; detail: string };
 
 type Check = {
+  upscaler?: string | null; // HelixSR Scaler: whose log this is (HLX DLSS, HLX FSR 4, HLX FSR 4 Full)
   exists: boolean;
   // fallback: HLX FSR 4 handed (some) upscaling to AMD's own FSR
   status: "running" | "fallback" | "error" | "loaded" | "none";
@@ -130,7 +133,9 @@ type OptiTarget = {
   dir: string;
   rel: string;
   configured: boolean;
-  installed_kind: ReleaseKind | "official" | "scaler" | null; // "official": by HelixSR 1.7+'s own setup; "scaler": HelixSR Scaler (HelixSR Desktop)
+  installed_kind: ReleaseKind | "official" | "scaler" | null; // "official": by HelixSR 1.7+'s own setup; "scaler": HelixSR Scaler (this plugin or HelixSR Desktop)
+  scaler_version: string | null; // HelixSR Scaler's version
+  scaler_launch: string | null; // the Steam launch option HelixSR Scaler needs (e.g. WINEDLLOVERRIDES="winmm=n,b"); null: none
   nvngx_path: string;
   helix_folder_present: boolean;
   helix_version: string | null;
@@ -161,6 +166,7 @@ type Active = {
   upscaler: string | null;
   dlss_built: boolean; // 3.0+: HLX DLSS built (for OptiScaler's DLSS)
   full: boolean; // 3.2.1+: HLX FSR 4 Full, AMD's full FSR 4 network (sharper, slower), offered next to HLX FSR 4
+  scaler: boolean; // 3.0+: HelixSR Scaler can be installed (needs HLX DLSS built: dlss_built)
   // 3.0+: where HelixSR's own (DLSS) network comes from next to HLX FSR 4, see ownNetworkRelease
   own_net: { tag: string; version: string | null } | null;
 };
@@ -342,6 +348,9 @@ const installOptiscaler = callable<
   Result
 >("install_optiscaler");
 const uninstallOptiscaler = callable<[path: string], Result>("uninstall_optiscaler");
+// HelixSR Scaler through HelixSR's own installer; path: the game's folder
+const installScaler = callable<[path: string], Result>("install_scaler");
+const uninstallScaler = callable<[path: string], Result>("uninstall_scaler");
 const setOptiLogging = callable<[path: string, on: boolean], Result>("set_opti_logging");
 const setHelixOption = callable<[folder: string, option: string, value: string], Result>("set_helix_option");
 
@@ -967,6 +976,18 @@ function HelixSection({ state, refresh }: { state: HelixState | null; refresh: (
           </ButtonItem>
         </PanelSectionRow>
       )}
+      {/* 3.2.0+ ships HLX FSR 4 Lite built, so the release is ready without the setup; HelixSR Scaler also needs the DLSS
+          network (HLX DLSS), which only the setup builds */}
+      {step === 3 && tag && local.get(tag)?.scaler && !local.get(tag)?.dlss_built && state.setup_script && !setupRunning && !busy && (
+        <>
+          <Note>HelixSR Scaler (for games without OptiScaler) also needs this release's DLSS network.</Note>
+          <PanelSectionRow>
+            <ButtonItem layout="below" onClick={setup}>
+              Build HelixSR {tag}'s DLSS network (for HelixSR Scaler)
+            </ButtonItem>
+          </PanelSectionRow>
+        </>
+      )}
       <SetupPanel s={state.setup} refresh={refresh} />
       <Note>
         Updating later: pick the newer version here, download and build it, then press "Switch to …" in each game. It
@@ -1278,7 +1299,7 @@ function DirectSection({
     .join(" · ");
 
   return (
-    <Accordion id="direct" title="In place of the game's FSR 3.1" summary={summary}>
+    <Accordion id="direct" title="In place of the game's FSR 3.1" defaultOpen summary={summary}>
       {items.map((t) => {
         const installed = t.state === "helixsr";
         const differs = installed && !!active.version && t.helix_version !== active.version;
@@ -1487,8 +1508,179 @@ function LaunchOptionControl({ appid, needed }: { appid: string; needed: boolean
   );
 }
 
+// --- HelixSR Scaler (3.0+): HelixSR's own OptiScaler package, installed by HelixSR's own installer (its bridge) ----------
+
+// A Steam launch option HelixSR Scaler needs (e.g. WINEDLLOVERRIDES="winmm=n,b"), in front of the game's other options
+const withVar = (o: string, v: string) => {
+  const rest = o.split(v).join("").replace(/\s+/g, " ").trim();
+  if (!rest) return `${v} %command%`;
+  return `${v} ${rest.includes("%command%") ? rest : `%command% ${rest}`}`;
+};
+const withoutVar = (o: string, v: string) => {
+  const rest = o.split(v).join("").replace(/\s+/g, " ").trim();
+  if (rest === "%command%") return "";
+  return rest.startsWith("%command% ") && !rest.slice(10).includes("%command%") ? rest.slice(10) : rest;
+};
+
+function ScalerLaunchControl({ appid, option }: { appid: string; option: string }) {
+  const id = Number(appid);
+  const [opts, setOpts] = useState<string | null | undefined>(undefined);
+  const load = useCallback(() => {
+    readLaunchOptions(id).then(setOpts);
+  }, [id]);
+  useEffect(() => {
+    load();
+  }, [load]);
+  const apply = (value: string) => {
+    try {
+      SteamClient.Apps.SetAppLaunchOptions(id, value);
+      toaster.toast({ title: "Launch options", body: value ? `Set to: ${value}` : "Cleared" });
+    } catch (e) {
+      toaster.toast({ title: "Launch options", body: `Couldn't set them: ${e}` });
+    }
+    setTimeout(load, 500);
+  };
+  if (opts === undefined) return <Note>Reading the game's launch options…</Note>;
+  if (opts === null || !id) {
+    return (
+      <Note>
+        <span style={{ color: YELLOW }}>
+          HelixSR Scaler needs this in the game's Steam launch options (game → Properties → Launch Options):
+        </span>
+        <div style={mono}>{option} %command%</div>
+      </Note>
+    );
+  }
+  const has = opts.includes(option);
+  return (
+    <>
+      <Note>
+        {has ? (
+          <span style={{ color: GREEN, fontWeight: 600 }}>✓ Launch option set (Proton loads HelixSR Scaler)</span>
+        ) : (
+          <span style={{ color: YELLOW, fontWeight: 600 }}>
+            Launch option missing: the game has its own dxgi.dll, so HelixSR Scaler went in under another name, which
+            Proton only loads with this option.
+          </span>
+        )}
+        <div style={mono}>{opts || "(no launch options)"}</div>
+      </Note>
+      {!has && (
+        <PanelSectionRow>
+          <ButtonItem layout="below" onClick={() => apply(withVar(opts, option))}>
+            Add launch option
+          </ButtonItem>
+        </PanelSectionRow>
+      )}
+    </>
+  );
+}
+
+// Install for a game without OptiScaler: HelixSR's own installer puts HelixSR Scaler next to the game's .exe
+function ScalerInstall({ game, active, guard, reload }: { game: GameDetail; active: Active; guard: Guard; reload: () => void }) {
+  const [busy, setBusy] = useState(false);
+  const ready = active.dlss_built;
+  return (
+    <Accordion id="scaler" title="HelixSR Scaler" defaultOpen summary={`Not installed${ready ? "" : " (needs the DLSS network built)"}`}>
+      <Note>
+        HelixSR Scaler is HelixSR's own OptiScaler. It goes next to the game's .exe, so this game doesn't need OptiScaler
+        from elsewhere. In the game select DLSS (or FSR / XeSS if there's no DLSS); in its menu (Insert key) you can
+        switch between HLX DLSS, HLX FSR 4 Lite, HLX FSR 4 Full and AMD's FSR. Installed by HelixSR's own installer, the
+        same way as HelixSR Desktop; Remove puts the game's files back.
+        {game.inputs.length === 0 && game.direct.length === 0
+          ? " No DLSS, XeSS or FSR file was found in this game: it only works if the game offers one of them in its graphics settings and runs on DirectX 12."
+          : ""}
+      </Note>
+      <PanelSectionRow>
+        <ButtonItem
+          layout="below"
+          disabled={!ready || busy || !!guard.install}
+          onClick={async () => {
+            setBusy(true);
+            toast(await installScaler(game.path), "HelixSR Scaler");
+            setBusy(false);
+            reload();
+          }}
+        >
+          {busy
+            ? "Installing… (takes a moment)"
+            : ready
+            ? `Install HelixSR Scaler with HelixSR ${active.version}`
+            : `Needs HelixSR ${active.version ?? ""}'s DLSS network: build it in HelixSR Installation`}
+        </ButtonItem>
+      </PanelSectionRow>
+    </Accordion>
+  );
+}
+
+// An installed HelixSR Scaler (by this plugin or HelixSR Desktop): update to the selected release, remove, launch option
+function ScalerControls({
+  o,
+  gamePath,
+  appid,
+  active,
+  guard,
+  reload,
+}: {
+  o: OptiTarget;
+  gamePath: string;
+  appid: string;
+  active: Active;
+  guard: Guard;
+  reload: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const run = async (fn: () => Promise<Result>) => {
+    setBusy(true);
+    toast(await fn(), "HelixSR Scaler");
+    setBusy(false);
+    reload();
+  };
+  const differs = active.scaler && active.dlss_built && !!active.version && o.helix_version !== active.version;
+  return (
+    <>
+      <Note>
+        HelixSR's settings and the upscaler (HLX DLSS, HLX FSR 4 Lite, HLX FSR 4 Full, AMD's FSR) are in its in-game
+        menu (Insert key) or OptiScaler.ini, section [HelixSR]. In the game, select DLSS.
+      </Note>
+      {o.scaler_launch && appid && <ScalerLaunchControl appid={appid} option={o.scaler_launch} />}
+      {differs && (
+        <PanelSectionRow>
+          <ButtonItem layout="below" disabled={busy || !!guard.install} onClick={() => run(() => installScaler(gamePath))}>
+            Switch to HelixSR {active.version} (HelixSR Scaler)
+          </ButtonItem>
+        </PanelSectionRow>
+      )}
+      <PanelSectionRow>
+        <ButtonItem
+          layout="below"
+          disabled={busy || !!guard.remove}
+          onClick={() =>
+            run(async () => {
+              const r = await uninstallScaler(gamePath);
+              // its launch option goes with it (the game's other options stay)
+              const opts = r.ok && o.scaler_launch && appid ? await readLaunchOptions(Number(appid)) : null;
+              if (opts && o.scaler_launch && opts.includes(o.scaler_launch)) {
+                try {
+                  SteamClient.Apps.SetAppLaunchOptions(Number(appid), withoutVar(opts, o.scaler_launch));
+                } catch {
+                  return { ...r, message: `${r.message} Take ${o.scaler_launch} out of the game's launch options.` };
+                }
+              }
+              return r;
+            })
+          }
+        >
+          {busy ? "Working…" : "Remove HelixSR Scaler"}
+        </ButtonItem>
+      </PanelSectionRow>
+    </>
+  );
+}
+
 function OptiItem({
   o,
+  gamePath,
   active,
   appid,
   guard,
@@ -1497,6 +1689,7 @@ function OptiItem({
   reload,
 }: {
   o: OptiTarget;
+  gamePath: string;
   active: Active;
   appid: string;
   guard: Guard;
@@ -1524,7 +1717,7 @@ function OptiItem({
   const own = hlxRelease ? active.own_net : null;
   // HelixSR's own network installed next to the selected 3.x release on purpose: not an older leftover to switch from
   const ownInstalled = !!own && installed === "ffx" && !o.upscaler && o.helix_version === own.version;
-  const scaler = installed === "scaler"; // HelixSR Scaler from HelixSR Desktop: shown and checked, not managed
+  const scaler = installed === "scaler"; // HelixSR Scaler (this plugin or HelixSR Desktop): managed by HelixSR's installer
   const official = installed === "official" || scaler;
   const differs = installed !== null && !!active.version && o.helix_version !== active.version && !ownInstalled;
   const sizeMb = o.current_sr_dll ? (o.current_sr_dll.size / 1048576).toFixed(1) : null;
@@ -1535,7 +1728,7 @@ function OptiItem({
         <div style={{ fontWeight: 600 }}>{o.rel === "." ? "Game folder" : o.rel}</div>
         <div>
           {scaler
-            ? `HelixSR ${o.helix_version ?? ""} installed with HelixSR Scaler (HelixSR Desktop): HelixSR is built into this OptiScaler`
+            ? `HelixSR ${o.helix_version ?? ""} installed with HelixSR Scaler${o.scaler_version ? ` ${o.scaler_version}` : ""}: HelixSR's own OptiScaler`
             : official
             ? o.official_route === "dlss"
               ? `HelixSR ${o.helix_version ?? ""} installed by HelixSR's own setup as the game's DLSS (experimental route, without OptiScaler)`
@@ -1587,10 +1780,7 @@ function OptiItem({
           </ButtonItem>
         </PanelSectionRow>
       ) : scaler ? (
-        <Note>
-          The plugin leaves this install to HelixSR Desktop: update or remove it there. HelixSR's settings are in its
-          in-game menu (Insert) or OptiScaler.ini, section [HelixSR]. The check below still works.
-        </Note>
+        <ScalerControls o={o} gamePath={gamePath} appid={appid} active={active} guard={guard} reload={reload} />
       ) : official ? (
         <Note>
           The plugin leaves this install to HelixSR's setup. To update or remove it, run helixsr-setup.sh from HelixSR's
@@ -1791,7 +1981,7 @@ function OptiItem({
   );
 }
 
-type Install = { how: "direct" | "opti" | "dlss"; version: string | null; upscaler?: string | null; check: Check };
+type Install = { how: "direct" | "opti" | "dlss" | "scaler"; version: string | null; upscaler?: string | null; check: Check };
 
 // What the closed OptiScaler section says: HelixSR's state there, plus how many warnings it holds.
 function optiSummary(items: OptiTarget[]) {
@@ -1829,10 +2019,87 @@ function freshness(check: Check, session: Session): "current" | "last" | "stale"
   return "unknown";
 }
 
+// --- the ways into a game: the panel shows the one that fits, the others folded under "Other ways" -------------------
+
+type Way = "direct" | "opti" | "scaler";
+
+// HelixSR Scaler (3.0+) for a game without OptiScaler, without HelixSR in place of its FSR and without a DirectX 11 exe
+function scalerOffered(game: GameDetail, active: Active) {
+  return (
+    active.scaler &&
+    game.optiscaler.length === 0 &&
+    game.official_dlss.length === 0 &&
+    !game.inputs_dx11 &&
+    !game.direct.some((t) => t.state !== "original" || t.dx11)
+  );
+}
+
+function gameWays(game: GameDetail, active: Active): Way[] {
+  const out: Way[] = [];
+  if (game.optiscaler.length > 0) out.push("opti");
+  if (scalerOffered(game, active)) out.push("scaler");
+  if (game.direct.length > 0) out.push("direct");
+  return out;
+}
+
+// the way installed here, else the game's OptiScaler, else HelixSR Scaler, else in place of its FSR 3.1
+function pickedWay(game: GameDetail, active: Active): Way | null {
+  if (game.direct.some((t) => t.state !== "original")) return "direct";
+  const ways = gameWays(game, active);
+  return ways[0] ?? null;
+}
+
+const WAY_HINT: Record<Way, string> = {
+  opti: "OptiScaler (the one the game has, e.g. from Decky Framegen): HLX FSR 4 Lite / Full or HelixSR 2.0.0's network.",
+  scaler: "HelixSR Scaler: HelixSR's own OptiScaler, with HLX DLSS. Select DLSS in the game.",
+  direct: "In place of the game's FSR 3.1: no OptiScaler involved. Select AMD FSR in the game.",
+};
+
+// "Other ways (n)": one line each when folded; open, the sections follow as their own sections
+function OtherWays({ ways, children }: { ways: Way[]; children: React.ReactNode }) {
+  const [open, setOpen] = useStoredFlag("open:otherways", false);
+  const [focused, setFocused] = useState(false);
+  if (ways.length === 0) return null;
+  const toggle = () => setOpen(!open);
+  return (
+    <>
+      <PanelSection>
+        <PanelSectionRow>
+          <Focusable
+            onActivate={toggle}
+            onClick={toggle}
+            onGamepadFocus={() => setFocused(true)}
+            onGamepadBlur={() => setFocused(false)}
+            style={{
+              display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, cursor: "pointer",
+              padding: "6px 8px", margin: "0 -8px", borderRadius: 3,
+              background: focused ? "rgba(255,255,255,0.12)" : "transparent",
+            }}
+          >
+            <div className={staticClasses.PanelSectionTitle} style={{ margin: 0, padding: 0 }}>
+              Other ways ({ways.length})
+            </div>
+            <span style={{ fontSize: 12, color: "#b8bcbf" }}>{open ? "▾" : "▸"}</span>
+          </Focusable>
+        </PanelSectionRow>
+        {!open && (
+          <Note>
+            {ways.map((w) => (
+              <div key={w}>{WAY_HINT[w]}</div>
+            ))}
+          </Note>
+        )}
+      </PanelSection>
+      {open && children}
+    </>
+  );
+}
+
 const SELECT_TEXT: Record<Install["how"], string> = {
   direct: "select AMD FSR as the upscaler in the game",
   opti: "select DLSS as the upscaler in the game: it gives HelixSR the best input (XeSS or FSR also work if the game doesn't offer DLSS, but can shimmer more)",
   dlss: "select DLSS as the upscaler in the game",
+  scaler: "select DLSS as the upscaler in the game (or FSR / XeSS if it has no DLSS); HelixSR Scaler's menu (Insert key) picks HelixSR's upscaler",
 };
 
 // One line per game: is HelixSR installed here, and did it actually upscale? Built from the install state, helixsr.log
@@ -1844,7 +2111,12 @@ function gameStatus(game: GameDetail, active: Active): { color: string; title: s
       .map((t) => ({ how: "direct" as const, version: t.helix_version, upscaler: t.upscaler, check: t.check })),
     ...game.optiscaler
       .filter((o) => o.configured && !o.disabled)
-      .map((o) => ({ how: "opti" as const, version: o.helix_version, upscaler: o.upscaler, check: o.check })),
+      .map((o) =>
+        o.installed_kind === "scaler"
+          ? // the upscaler whose log is newest: Scaler's menu picks HLX DLSS, HLX FSR 4 Lite or Full
+            { how: "scaler" as const, version: o.helix_version, upscaler: o.check.upscaler ?? o.upscaler, check: o.check }
+          : { how: "opti" as const, version: o.helix_version, upscaler: o.upscaler, check: o.check },
+      ),
     ...game.official_dlss.map((d) => ({ how: "dlss" as const, version: d.helix_version, check: d.check })),
   ];
   if (installs.length === 0) {
@@ -1862,8 +2134,11 @@ function gameStatus(game: GameDetail, active: Active): { color: string; title: s
     if (!active.ready) {
       return { color: GREY, title: "HelixSR isn't installed in this game", detail: "First download and build HelixSR (steps 1 and 2 above), then install it here." };
     }
-    const where = game.optiscaler.length > 0
+    const way = pickedWay(game, active);
+    const where = way === "opti"
       ? `open the OptiScaler section and press "Install HelixSR ${active.version} via OptiScaler"`
+      : way === "scaler"
+      ? `open the HelixSR Scaler section and press "Install HelixSR Scaler with HelixSR ${active.version}"`
       : `open "In place of the game's FSR 3.1" and press "Install HelixSR ${active.version} here"`;
     return { color: GREY, title: "HelixSR isn't installed in this game", detail: `To install it, ${where} below.` };
   }
@@ -1883,7 +2158,7 @@ function gameStatus(game: GameDetail, active: Active): { color: string; title: s
   if (i.check.status === "error" && i.upscaler === FULL_NAME) {
     return { color: RED, title: `Installed, but ${FULL_NAME} can't upscale`, detail: `Its log says why (Show technical details). "Use HLX FSR 4 Lite instead" below switches to HLX FSR 4 Lite, which runs on more GPUs.`, extra };
   }
-  if (i.check.status === "error" && i.upscaler) {
+  if (i.check.status === "error" && i.upscaler === "HLX FSR 4") {
     // HLX FSR 4 (Lite) doesn't show a red frame: AMD's own FSR runs instead, and its log says why
     return { color: RED, title: `Installed, but ${LITE_NAME} can't upscale`, detail: `AMD's own FSR runs instead. Its log says why (Show technical details); if it says the shaders aren't built, build HelixSR above and install it here again.`, extra };
   }
@@ -1936,7 +2211,24 @@ function GameSection({ appid, active, onRemoved }: { appid: string; active: Acti
     install: removeBlock || (game.anticheat.length > 0 && !game.anticheat_ack ? "anticheat" : null),
   };
   const relevant = game.direct.length > 0 || game.optiscaler.length > 0 || game.official_dlss.length > 0;
+  const scalerOffer = scalerOffered(game, active);
+  const picked = pickedWay(game, active);
+  const others = gameWays(game, active).filter((w) => w !== picked);
   const status = relevant ? gameStatus(game, active) : null;
+  // a Scaler install shows up as an OptiScaler folder: the section is named after it
+  const scalerOnly = game.optiscaler.length > 0 && game.optiscaler.every((o) => o.installed_kind === "scaler");
+  const wayView = (w: Way) =>
+    w === "direct" ? (
+      <DirectSection key="direct" items={game.direct} active={active} guard={guard} session={game.session} details={details} reload={reload} />
+    ) : w === "scaler" ? (
+      <ScalerInstall key="scaler" game={game} active={active} guard={guard} reload={reload} />
+    ) : (
+      <Accordion key="opti" id="optiscaler" title={scalerOnly ? "HelixSR Scaler" : "OptiScaler"} defaultOpen summary={optiSummary(game.optiscaler)}>
+        {game.optiscaler.map((o) => (
+          <OptiItem key={o.dir} o={o} gamePath={game.path} active={active} appid={game.source === "steam" ? game.appid : String(game.shortcut_appid ?? "")} guard={guard} session={game.session} details={details} reload={reload} />
+        ))}
+      </Accordion>
+    );
 
   return (
     <>
@@ -2033,18 +2325,20 @@ function GameSection({ appid, active, onRemoved }: { appid: string; active: Acti
               ) : game.inputs.length > 0 ? (
                 <>
                   <div style={{ fontSize: 15, fontWeight: 700, color: "#dcdedf", marginBottom: 2 }}>
-                    {game.inputs.join(" / ")} only: install OptiScaler first
+                    {game.inputs.join(" / ")} only: {scalerOffer ? "install HelixSR Scaler below" : "install OptiScaler first"}
                   </div>
                   <div>
-                    This game has no FSR 3.1 and no OptiScaler yet, so there's nothing to install HelixSR into. Install
-                    OptiScaler into it (for example with the Decky Framegen plugin), then press Check again: an
-                    OptiScaler section appears here with one button to install HelixSR. In the game, select{" "}
-                    {game.inputs[0]}; OptiScaler hands it to HelixSR.
+                    {scalerOffer
+                      ? `This game has no FSR 3.1 and no OptiScaler. HelixSR Scaler (below) brings its own OptiScaler; in the game, select ${game.inputs[0]}.`
+                      : `This game has no FSR 3.1 and no OptiScaler yet, so there's nothing to install HelixSR into. Install OptiScaler into it (for example with the Decky Framegen plugin), or select a HelixSR 3.x release to use HelixSR Scaler, then press Check again. In the game, select ${game.inputs[0]}; OptiScaler hands it to HelixSR.`}
                   </div>
                 </>
               ) : (
                 <div>
-                  No FSR 3.1, OptiScaler, DLSS or XeSS found in this game, so HelixSR has nothing to work with here.
+                  No FSR 3.1, OptiScaler, DLSS or XeSS found in this game
+                  {scalerOffer
+                    ? ". HelixSR Scaler (below) can still find an upscaler built into the game while it runs."
+                    : ", so HelixSR has nothing to work with here."}
                 </div>
               )}
             </div>
@@ -2079,14 +2373,8 @@ function GameSection({ appid, active, onRemoved }: { appid: string; active: Acti
           ))}
         </Accordion>
       )}
-      <DirectSection items={game.direct} active={active} guard={guard} session={game.session} details={details} reload={reload} />
-      {game.optiscaler.length > 0 && (
-        <Accordion id="optiscaler" title="OptiScaler" summary={optiSummary(game.optiscaler)}>
-          {game.optiscaler.map((o) => (
-            <OptiItem key={o.dir} o={o} active={active} appid={game.source === "steam" ? game.appid : String(game.shortcut_appid ?? "")} guard={guard} session={game.session} details={details} reload={reload} />
-          ))}
-        </Accordion>
-      )}
+      {picked && wayView(picked)}
+      <OtherWays ways={others}>{others.map((w) => wayView(w))}</OtherWays>
     </>
   );
 }
@@ -2361,6 +2649,7 @@ function Content() {
             upscaler: helix?.upscaler ?? null,
             dlss_built: helix?.dlss_built ?? false,
             full: helix?.full ?? false,
+            scaler: helix?.scaler ?? false,
             own_net: helix?.upscaler ? ownNetworkRelease(helix?.versions) : null,
           }}
           onRemoved={scan}
