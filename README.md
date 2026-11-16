@@ -41,8 +41,11 @@ OptiScaler.
   game session), shows OptiScaler settings that commonly get in the way (DLSS input off, Steam Input blocked, menu key),
   and has a network on/off switch to prove HelixSR is doing the upscaling.
 - **Settings per game** where the release supports them (sharpening from 1.8, network resolution up to 1.4).
-- **Less scrolling:** HelixSR Installation, Other Stores, OptiScaler and "In place of the game's FSR 3.1" fold away (tap the
-  header); a closed section shows a one-line summary, including warnings inside. Installation starts open.
+- **One way per game:** a game shows the way that fits it (the one HelixSR is installed with, else the game's
+  OptiScaler, else HelixSR Scaler, else in place of its FSR 3.1); the others wait under **Other ways**, one line each on
+  when you'd use them.
+- **Less scrolling:** HelixSR Installation, Other Stores and each way's section fold away (tap the header); a closed
+  section shows a one-line summary, including warnings inside.
 - **Plugin updates from the panel:** a newer release shows up at the top with an **Update** button; Decky installs it
   after you confirm.
 - **Technical details on demand:** logs, paths and OptiScaler settings stay behind **Show technical details**; rarely

@@ -1299,7 +1299,7 @@ function DirectSection({
     .join(" · ");
 
   return (
-    <Accordion id="direct" title="In place of the game's FSR 3.1" summary={summary}>
+    <Accordion id="direct" title="In place of the game's FSR 3.1" defaultOpen summary={summary}>
       {items.map((t) => {
         const installed = t.state === "helixsr";
         const differs = installed && !!active.version && t.helix_version !== active.version;
@@ -1581,7 +1581,7 @@ function ScalerInstall({ game, active, guard, reload }: { game: GameDetail; acti
   const [busy, setBusy] = useState(false);
   const ready = active.dlss_built;
   return (
-    <Accordion id="scaler" title="HelixSR Scaler" summary={`Not installed${ready ? "" : " (needs the DLSS network built)"}`}>
+    <Accordion id="scaler" title="HelixSR Scaler" defaultOpen summary={`Not installed${ready ? "" : " (needs the DLSS network built)"}`}>
       <Note>
         HelixSR Scaler is HelixSR's own OptiScaler. It goes next to the game's .exe, so this game doesn't need OptiScaler
         from elsewhere. In the game select DLSS (or FSR / XeSS if there's no DLSS); in its menu (Insert key) you can
@@ -2019,6 +2019,82 @@ function freshness(check: Check, session: Session): "current" | "last" | "stale"
   return "unknown";
 }
 
+// --- the ways into a game: the panel shows the one that fits, the others folded under "Other ways" -------------------
+
+type Way = "direct" | "opti" | "scaler";
+
+// HelixSR Scaler (3.0+) for a game without OptiScaler, without HelixSR in place of its FSR and without a DirectX 11 exe
+function scalerOffered(game: GameDetail, active: Active) {
+  return (
+    active.scaler &&
+    game.optiscaler.length === 0 &&
+    game.official_dlss.length === 0 &&
+    !game.inputs_dx11 &&
+    !game.direct.some((t) => t.state !== "original" || t.dx11)
+  );
+}
+
+function gameWays(game: GameDetail, active: Active): Way[] {
+  const out: Way[] = [];
+  if (game.optiscaler.length > 0) out.push("opti");
+  if (scalerOffered(game, active)) out.push("scaler");
+  if (game.direct.length > 0) out.push("direct");
+  return out;
+}
+
+// the way installed here, else the game's OptiScaler, else HelixSR Scaler, else in place of its FSR 3.1
+function pickedWay(game: GameDetail, active: Active): Way | null {
+  if (game.direct.some((t) => t.state !== "original")) return "direct";
+  const ways = gameWays(game, active);
+  return ways[0] ?? null;
+}
+
+const WAY_HINT: Record<Way, string> = {
+  opti: "OptiScaler (the one the game has, e.g. from Decky Framegen): HLX FSR 4 Lite / Full or HelixSR 2.0.0's network.",
+  scaler: "HelixSR Scaler: HelixSR's own OptiScaler, with HLX DLSS. Select DLSS in the game.",
+  direct: "In place of the game's FSR 3.1: no OptiScaler involved. Select AMD FSR in the game.",
+};
+
+// "Other ways (n)": one line each when folded; open, the sections follow as their own sections
+function OtherWays({ ways, children }: { ways: Way[]; children: React.ReactNode }) {
+  const [open, setOpen] = useStoredFlag("open:otherways", false);
+  const [focused, setFocused] = useState(false);
+  if (ways.length === 0) return null;
+  const toggle = () => setOpen(!open);
+  return (
+    <>
+      <PanelSection>
+        <PanelSectionRow>
+          <Focusable
+            onActivate={toggle}
+            onClick={toggle}
+            onGamepadFocus={() => setFocused(true)}
+            onGamepadBlur={() => setFocused(false)}
+            style={{
+              display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, cursor: "pointer",
+              padding: "6px 8px", margin: "0 -8px", borderRadius: 3,
+              background: focused ? "rgba(255,255,255,0.12)" : "transparent",
+            }}
+          >
+            <div className={staticClasses.PanelSectionTitle} style={{ margin: 0, padding: 0 }}>
+              Other ways ({ways.length})
+            </div>
+            <span style={{ fontSize: 12, color: "#b8bcbf" }}>{open ? "▾" : "▸"}</span>
+          </Focusable>
+        </PanelSectionRow>
+        {!open && (
+          <Note>
+            {ways.map((w) => (
+              <div key={w}>{WAY_HINT[w]}</div>
+            ))}
+          </Note>
+        )}
+      </PanelSection>
+      {open && children}
+    </>
+  );
+}
+
 const SELECT_TEXT: Record<Install["how"], string> = {
   direct: "select AMD FSR as the upscaler in the game",
   opti: "select DLSS as the upscaler in the game: it gives HelixSR the best input (XeSS or FSR also work if the game doesn't offer DLSS, but can shimmer more)",
@@ -2058,9 +2134,10 @@ function gameStatus(game: GameDetail, active: Active): { color: string; title: s
     if (!active.ready) {
       return { color: GREY, title: "HelixSR isn't installed in this game", detail: "First download and build HelixSR (steps 1 and 2 above), then install it here." };
     }
-    const where = game.optiscaler.length > 0
+    const way = pickedWay(game, active);
+    const where = way === "opti"
       ? `open the OptiScaler section and press "Install HelixSR ${active.version} via OptiScaler"`
-      : game.direct.length === 0 && active.scaler
+      : way === "scaler"
       ? `open the HelixSR Scaler section and press "Install HelixSR Scaler with HelixSR ${active.version}"`
       : `open "In place of the game's FSR 3.1" and press "Install HelixSR ${active.version} here"`;
     return { color: GREY, title: "HelixSR isn't installed in this game", detail: `To install it, ${where} below.` };
@@ -2134,14 +2211,24 @@ function GameSection({ appid, active, onRemoved }: { appid: string; active: Acti
     install: removeBlock || (game.anticheat.length > 0 && !game.anticheat_ack ? "anticheat" : null),
   };
   const relevant = game.direct.length > 0 || game.optiscaler.length > 0 || game.official_dlss.length > 0;
-  // HelixSR Scaler (3.0+) for a game without OptiScaler, HelixSR in place of its FSR, or a DirectX 11 exe
-  const scalerOffer =
-    active.scaler &&
-    game.optiscaler.length === 0 &&
-    game.official_dlss.length === 0 &&
-    !game.inputs_dx11 &&
-    !game.direct.some((t) => t.state !== "original" || t.dx11);
+  const scalerOffer = scalerOffered(game, active);
+  const picked = pickedWay(game, active);
+  const others = gameWays(game, active).filter((w) => w !== picked);
   const status = relevant ? gameStatus(game, active) : null;
+  // a Scaler install shows up as an OptiScaler folder: the section is named after it
+  const scalerOnly = game.optiscaler.length > 0 && game.optiscaler.every((o) => o.installed_kind === "scaler");
+  const wayView = (w: Way) =>
+    w === "direct" ? (
+      <DirectSection key="direct" items={game.direct} active={active} guard={guard} session={game.session} details={details} reload={reload} />
+    ) : w === "scaler" ? (
+      <ScalerInstall key="scaler" game={game} active={active} guard={guard} reload={reload} />
+    ) : (
+      <Accordion key="opti" id="optiscaler" title={scalerOnly ? "HelixSR Scaler" : "OptiScaler"} defaultOpen summary={optiSummary(game.optiscaler)}>
+        {game.optiscaler.map((o) => (
+          <OptiItem key={o.dir} o={o} gamePath={game.path} active={active} appid={game.source === "steam" ? game.appid : String(game.shortcut_appid ?? "")} guard={guard} session={game.session} details={details} reload={reload} />
+        ))}
+      </Accordion>
+    );
 
   return (
     <>
@@ -2286,15 +2373,8 @@ function GameSection({ appid, active, onRemoved }: { appid: string; active: Acti
           ))}
         </Accordion>
       )}
-      <DirectSection items={game.direct} active={active} guard={guard} session={game.session} details={details} reload={reload} />
-      {scalerOffer && <ScalerInstall game={game} active={active} guard={guard} reload={reload} />}
-      {game.optiscaler.length > 0 && (
-        <Accordion id="optiscaler" title="OptiScaler" summary={optiSummary(game.optiscaler)}>
-          {game.optiscaler.map((o) => (
-            <OptiItem key={o.dir} o={o} gamePath={game.path} active={active} appid={game.source === "steam" ? game.appid : String(game.shortcut_appid ?? "")} guard={guard} session={game.session} details={details} reload={reload} />
-          ))}
-        </Accordion>
-      )}
+      {picked && wayView(picked)}
+      <OtherWays ways={others}>{others.map((w) => wayView(w))}</OtherWays>
     </>
   );
 }
