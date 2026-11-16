@@ -110,7 +110,7 @@ class ScalerTest(FakeHomeTest):
             (self.rel / "HelixSR" / n).unlink()
         r = self.install()
         self.assertFalse(r["ok"])
-        self.assertIn("Build HelixSR 3.0.0 first", r["error"])
+        self.assertIn("DLSS network, which isn't built yet", r["error"])
         self.assertEqual(calls(self.rel), [])
 
     def test_refused_next_to_another_optiscaler_or_helixsr_in_place_of_fsr(self):

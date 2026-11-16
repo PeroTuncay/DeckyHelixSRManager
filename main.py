@@ -2229,8 +2229,8 @@ def install_scaler(folder, tag=None):
     if not v or not v.get("scaler"):
         raise RuntimeError("The selected HelixSR release has no HelixSR Scaler (it comes with HelixSR 3.x).")
     if not v.get("dlss_built"):
-        raise RuntimeError(f"Build HelixSR {v['version']} first (HelixSR Installation above): HelixSR Scaler runs "
-                           f"its DLSS network.")
+        raise RuntimeError(f"HelixSR Scaler runs HelixSR {v['version']}'s DLSS network, which isn't built yet: build it "
+                           f"in HelixSR Installation above.")
     rel = Path(v["dir"])
     out = run_bridge(rel, ["install", "--game", str(folder), "--way", "scaler", "--scaler", str(rel / SCALER_PKG)])
     g = out.get("game") or {}

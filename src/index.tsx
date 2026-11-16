@@ -976,6 +976,18 @@ function HelixSection({ state, refresh }: { state: HelixState | null; refresh: (
           </ButtonItem>
         </PanelSectionRow>
       )}
+      {/* 3.2.0+ ships HLX FSR 4 Lite built, so the release is ready without the setup; HelixSR Scaler also needs the DLSS
+          network (HLX DLSS), which only the setup builds */}
+      {step === 3 && tag && local.get(tag)?.scaler && !local.get(tag)?.dlss_built && state.setup_script && !setupRunning && !busy && (
+        <>
+          <Note>HelixSR Scaler (for games without OptiScaler) also needs this release's DLSS network.</Note>
+          <PanelSectionRow>
+            <ButtonItem layout="below" onClick={setup}>
+              Build HelixSR {tag}'s DLSS network (for HelixSR Scaler)
+            </ButtonItem>
+          </PanelSectionRow>
+        </>
+      )}
       <SetupPanel s={state.setup} refresh={refresh} />
       <Note>
         Updating later: pick the newer version here, download and build it, then press "Switch to …" in each game. It
@@ -1569,7 +1581,7 @@ function ScalerInstall({ game, active, guard, reload }: { game: GameDetail; acti
   const [busy, setBusy] = useState(false);
   const ready = active.dlss_built;
   return (
-    <Accordion id="scaler" title="HelixSR Scaler" summary={`Not installed${ready ? "" : " (build HelixSR first)"}`}>
+    <Accordion id="scaler" title="HelixSR Scaler" summary={`Not installed${ready ? "" : " (needs the DLSS network built)"}`}>
       <Note>
         HelixSR Scaler is HelixSR's own OptiScaler. It goes next to the game's .exe, so this game doesn't need OptiScaler
         from elsewhere. In the game select DLSS (or FSR / XeSS if there's no DLSS); in its menu (Insert key) you can
@@ -1594,7 +1606,7 @@ function ScalerInstall({ game, active, guard, reload }: { game: GameDetail; acti
             ? "Installing… (takes a moment)"
             : ready
             ? `Install HelixSR Scaler with HelixSR ${active.version}`
-            : `Build HelixSR ${active.version ?? ""} first (HelixSR Installation)`}
+            : `Needs HelixSR ${active.version ?? ""}'s DLSS network: build it in HelixSR Installation`}
         </ButtonItem>
       </PanelSectionRow>
     </Accordion>
