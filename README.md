@@ -25,6 +25,9 @@ OptiScaler.
   example from Decky Framegen), keeping your current FSR 4 selectable for comparison. With HelixSR 3.x, the OptiScaler
   section offers HLX FSR 4, HLX FSR 4 Full (from 3.3.0, experimental) and HelixSR 2.0.0's DLSS network; one button
   swaps one for another.
+- **HelixSR Scaler for games without OptiScaler (HelixSR 3.x, new):** HelixSR's own OptiScaler package, put into the
+  game by HelixSR's own installer (the one HelixSR Desktop uses), so DLSS / XeSS / FSR 2 games no longer need OptiScaler
+  from elsewhere first. Its in-game menu switches between HLX DLSS, HLX FSR 4 Lite, HLX FSR 4 Full and AMD's FSR.
 - **Games from other stores (opt-in):** Unifideck, Heroic (GOG, Amazon, Epic), Legendary, Lutris and games added to
   Steam by hand, each switched on in **Other Stores**, plus **Add game folder** for anything else. Only the folders the
   stores name are read, so the game list stays fast.
@@ -128,8 +131,8 @@ replaces the old version in that game; no cleanup is needed first.
 
 Pick the game under **Game Configuration** (the list shows games HelixSR can use: with an FSR 3.1 DLL or OptiScaler,
 and DLSS / XeSS / FSR 2 games, tagged "needs OptiScaler"; turn off the filter to see all). A DLSS or XeSS game without
-OptiScaler says what to do: install OptiScaler into it first (for example with the Decky Framegen plugin), then the
-OptiScaler section appears with the install button.
+OptiScaler gets a **HelixSR Scaler** section with a HelixSR 3.x release (see below); with an older release, install
+OptiScaler into it first (for example with the Decky Framegen plugin), then the OptiScaler section appears.
 Games from other stores appear there once their store is switched on in **Other Stores** (see
 [Games from other stores](#games-from-other-stores)).
 Close the game first: the plugin refuses to change its files while it runs or while Steam is still installing or
@@ -156,6 +159,16 @@ your account banned and only installs after you turn on **I understand the risk*
     says how to get it).
 
   Either one replaces the other with **Use … instead**. In the game, select DLSS (XeSS or FSR also work).
+- **Game without OptiScaler (HelixSR 3.x): HelixSR Scaler.** In the **HelixSR Scaler** section press **Install
+  HelixSR Scaler with HelixSR …** (it needs the release built: Scaler runs its DLSS network, HLX DLSS). HelixSR's own
+  installer (`setup/helixsr_bridge.py`, the same one HelixSR Desktop uses, run unmodified and only for this game)
+  puts Scaler next to the game's .exe as `dxgi.dll`. If the game has its own `dxgi.dll`, Scaler goes in under another
+  name and needs a Steam launch option (`WINEDLLOVERRIDES="…=n,b"`): the section offers **Add launch option** and
+  takes it out again on removal. In the game, select DLSS (or FSR / XeSS if it has no DLSS). Scaler's menu (Insert)
+  switches between HLX DLSS, HLX FSR 4 Lite, HLX FSR 4 Full and AMD's FSR; the status reads the log of whichever ran.
+  **Remove HelixSR Scaler** puts the game's own files back. A Scaler installed with HelixSR Desktop is managed the same
+  way. HelixSR's frame generation isn't included (the plugin builds HelixSR without it). New in 0.13.0 and not yet
+  tested on a Steam Deck.
 - **Game that ships FSR 3.1 itself (HelixSR 1.4, 1.7 or later):** in **In place of the game's FSR 3.1** press **Install
   HelixSR … here**, then select AMD FSR as the upscaler in the game's settings. This needs no OptiScaler. A game that
   offers both sections works either way (HelixSR 1.8's own setup prefers this one). With 3.x this installs HLX FSR 4;
@@ -250,7 +263,13 @@ applies to Steam games.
    to `*.original.dll` and puts HelixSR in its place, plus `helixsr.ini`. Same files and `helixsr-install.json` marker
    as the official `helixsr-install.sh`, so either tool can undo the other's install. HLX FSR 4 (3.x) goes in the same
    way, without `helixsr.ini`, and lists the game's kept FSR after itself.
-4. **OptiScaler**: creates a `HelixSR` folder next to `OptiScaler.ini` with HelixSR as both
+4. **HelixSR Scaler (3.x)**: runs the release's `setup/helixsr_bridge.py install --game <game folder> --way scaler
+   --scaler <release>/helixsr-scaler` (and `remove --game …`) with the system's `python3` (else the setup's portable
+   Python) and stdin closed, never with `--yes`; the bridge prints JSON. It refuses a game with another OptiScaler or
+   with HelixSR in place of its FSR (those have their own sections). Scaler's files are listed in
+   `HelixSR-Scaler.files`, the game's replaced files kept in `HelixSR-Scaler-backup`; the plugin's game scan skips
+   Scaler's own folders.
+5. **OptiScaler**: creates a `HelixSR` folder next to `OptiScaler.ini` with HelixSR as both
    `amd_fidelityfx_dx12.dll` and `amd_fidelityfx_upscaler_dx12.dll`, and sets in `OptiScaler.ini`:
    `Dx12Upscaler` (`ffx` on OptiScaler 0.9+, `fsr31` on older versions), `FfxDx12Path`, `FfxDx12SRPath` (as `Z:\…`
    paths) and `[FSR] UpscalerIndex=0`. The old values are remembered and restored on revert; a full copy is kept as
@@ -265,31 +284,31 @@ next to HelixSR, since HelixSR has none of its own; OptiScaler's own frame gener
    in the same way, plus its `hlx_fsr4.ini` (an edited one is kept). Up to 3.3.0 it runs on AMD's FSR SDK DLL from the
    release, which is copied in under that name instead; from 3.4.0 it needs no AMD DLL. HelixSR 2.0.0 next
    to a 3.x release is installed exactly like 2.0.0 on its own.
-5. **Setup progress**: while the setup runs, a progress bar with the current step (in step 5 the compiled shaders,
+6. **Setup progress**: while the setup runs, a progress bar with the current step (in step 5 the compiled shaders,
    e.g. 41/72), the elapsed time, whether it is actually working (CPU use of its processes) and what runs right now.
    HelixSR's steps print nothing while they work, so the log alone can stay unchanged for minutes. The setup keeps
    running when the menu is closed or Decky restarts the plugin, and its exit code is recorded either way. If it
    fails: the error lines, **Show full log**, **Run diagnostics** (Proton, Python/numpy, free space, GitHub, …) and
    **Save debug report** (`~/HelixSR/helixsr-manager-debug.txt`).
-6. **Clean up downloads** (under More options, optional): removes every downloaded release, the setup's Python, shader compiler and Wine data
+7. **Clean up downloads** (under More options, optional): removes every downloaded release, the setup's Python, shader compiler and Wine data
    (`~/.local/share/HelixSR`) and temporary files. Games keep their installed copy. Only files recognizably
    HelixSR's are removed from the HelixSR folder.
-7. **Check**: reads `helixsr.log` (network running / not running / loaded but idle, wave size, network resolution) and,
+8. **Check**: reads `helixsr.log` (network running / not running / loaded but idle, wave size, network resolution) and,
    if enabled, OptiScaler.log lines about HelixSR/FFX. For HLX FSR 4 it reads `HLX_FSR.log`, or its lines in
    `OptiScaler.log`; for HLX FSR 4 Full `hlx_fsr4.log` (with the render size of its frames). Whether a log is from the last game session is judged by the session's start in Steam's
    `logs/gameprocess_log.txt` (Steam's `LastPlayed` is written again when the game quits).
-8. **Settings**: the DLSS network on/off test switch, `NetworkResolution` and sharpening per install. The
+9. **Settings**: the DLSS network on/off test switch, `NetworkResolution` and sharpening per install. The
    `NetworkResolution` choices come from the installed release's own `helixsr.ini`, since they differ between
    releases (1.4.3 is HelixSR 1.3.0 again: auto/fast/full; 1.4.0-1.4.2: auto/full/QSSM/PRSM). 1.5+ has no settings
    file; only the experimental network switch is offered there.
-9. **Safety checks**: no change to a game's files while it runs (detected through Steam's process environment or a
+10. **Safety checks**: no change to a game's files while it runs (detected through Steam's process environment or a
    Windows program inside the game folder; for games from other stores by the folder alone) or while Steam is still installing/updating it (`StateFlags`, download
    folder). Games with anti-cheat files (EasyAntiCheat, BattlEye, …) need an explicit "I understand the risk" before
    installing; removing is always allowed.
-10. **Disable / Enable**: a direct install parks HelixSR's DLL as `*.helixsr-disabled.dll` and puts the game's file
+11. **Disable / Enable**: a direct install parks HelixSR's DLL as `*.helixsr-disabled.dll` and puts the game's file
     back; an OptiScaler install restores the previous `OptiScaler.ini` values and keeps the `HelixSR` folder. Enable
     switches back without downloading or building anything.
-11. **Other stores** (opt-in): reads the install lists of Unifideck, Heroic, Legendary and Lutris and Steam's
+12. **Other stores** (opt-in): reads the install lists of Unifideck, Heroic, Legendary and Lutris and Steam's
     `shortcuts.vdf` (each file size-capped, the Lutris database read-only), plus folders added by hand. Each listed
     game's folder becomes the only place the plugin may change files for that game.
 

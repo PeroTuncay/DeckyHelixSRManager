@@ -173,6 +173,18 @@ def release_full_dll(d):
     return p if ok else None
 
 
+BRIDGE = "setup/helixsr_bridge.py"   # HelixSR Desktop's backend: installs HelixSR Scaler into a game (JSON CLI)
+SCALER_PKG = "helixsr-scaler"         # HelixSR Scaler (OptiScaler with HelixSR) in a 3.x release
+SCALER_FILES = "HelixSR-Scaler.files"  # what HelixSR Scaler put into a game (its record, next to OptiScaler.ini)
+SCALER_OWN = ("optiscaler", "helixsr", "helixsr-fsrfg", "helixsr-scaler-backup")   # its folders next to that record
+
+
+def release_scaler(d):
+    """3.0+: the release can put HelixSR Scaler into a game through HelixSR's own bridge (it needs HLX DLSS built)."""
+    d = Path(d)
+    return (d / BRIDGE).is_file() and (d / SCALER_PKG / "OptiScaler.dll").is_file() and release_ngx_dll(d) is not None
+
+
 def release_ini(d):
     """The helixsr.ini a release ships: next to its DLL (HelixSR-fsrfg from 2.0; HelixSR/, for HLX DLSS, from 3.0),
     else in its top folder. HLX FSR 4 has none."""
@@ -250,6 +262,8 @@ def local_versions():
                         "dlss_built": bool(release_ngx_dll(d)) and has_network(release_ngx_dll(d)),
                         # 3.2.1+: HLX FSR 4 Full comes with it (for OptiScaler)
                         "full": bool(upscaler_name(dll)) and release_full_dll(d) is not None,
+                        # 3.0+: HelixSR Scaler can go into games without OptiScaler (through HelixSR's bridge)
+                        "scaler": release_scaler(d),
                         # 3.0-3.1: building HLX FSR 4 downloads AMD's driver package (3.2.0+ ships it built)
                         "amd_download": bool(upscaler_name(dll)) and hlx_amd_download(d),
                         "verified": bool(meta.get("verified")),
@@ -977,6 +991,8 @@ def scan_folder(folder, anticheat=None, dlss_installs=None, inputs=None):
             return
         if "optiscaler.ini" in names:
             opti.append(Path(d))
+        # HelixSR Scaler's own folders (its FSR DLLs, HelixSR, the game's files it replaced) aren't the game's
+        skip = SCALER_OWN if SCALER_FILES.lower() in names else ()
         if dlss_installs is not None and "nvngx.dll" in names and \
                 (read_json(Path(d) / OPTI_SUBDIR / NGX_MARKER) or {}).get("route") == "dlss":
             dlss_installs.append(Path(d))
@@ -985,7 +1001,7 @@ def scan_folder(folder, anticheat=None, dlss_installs=None, inputs=None):
             if anticheat is not None and len(anticheat) < 5 and any(a in low for a in ANTICHEAT):
                 anticheat.append(os.path.relpath(e.path, folder))
             if e.is_dir(follow_symlinks=False):
-                if depth > 0:
+                if depth > 0 and low not in skip:
                     walk(e.path, depth - 1)
             elif low in NAMES:
                 dlls.append(Path(e.path))
@@ -1284,7 +1300,8 @@ def helix_state():
             "downloaded": cur is not None, "version": cur["version"] if cur else None,
             "built": bool(cur and cur["built"]), "setup_script": bool(cur and cur["setup_script"]),
             "kind": cur["kind"] if cur else None, "upscaler": cur["upscaler"] if cur else None,
-            "dlss_built": bool(cur and cur["dlss_built"]), "full": bool(cur and cur["full"])}
+            "dlss_built": bool(cur and cur["dlss_built"]), "full": bool(cur and cur["full"]),
+            "scaler": bool(cur and cur["scaler"])}
 
 
 def built_dll(tag=None):
@@ -1476,6 +1493,18 @@ def opti_hlx_check(opti_dir):
     info = file_info(log)
     lines = hlx_log_lines(log) if info else []
     return hlx_log_check(log, info, lines) if lines else check
+
+
+def scaler_check(opti_dir):
+    """The check for HelixSR Scaler: the newest log of the upscaler its menu has selected: HLX DLSS (HelixSR/helixsr.log),
+    HLX FSR 4 Full (its custom folder's hlx_fsr4.log) or HLX FSR 4 Lite (OptiScaler/HLX_FSR.log)."""
+    o = Path(opti_dir)
+    checks = []
+    for d, name in ((o / OPTI_SUBDIR, HLX_DLSS_NAME), (o / "OptiScaler/custom/HLX FSR 4 Full/ffx", HLX_FULL_NAME),
+                    (o / "OptiScaler", HLX_NAME)):
+        checks.append({**helix_log_check(d), "upscaler": name})
+    found = [c for c in checks if c["exists"]]
+    return max(found, key=lambda c: c.get("mtime") or 0) if found else checks[0]
 
 
 def helix_log_check(folder):
@@ -1847,9 +1876,11 @@ def opti_state(opti_dir, game_folder):
     if kind == "official":
         configured = True
         helix_files = sub / "helixsr.dll" if (sub / "helixsr.dll").exists() else opti_dir / DLL_NGX
+    scaler = None
     if kind is None and is_scaler(opti_dir):
-        kind, configured = "scaler", True   # shown and checked, left to HelixSR Desktop
+        kind, configured = "scaler", True   # HelixSR Scaler: managed through HelixSR's bridge
         helix_files = folder_helix_dll(sub) or sub / NAMES[1]
+        scaler = scaler_record(opti_dir)
     if kind == "ngx":
         nv_path = linux_path(nvngx, opti_dir)
         configured = nv_path is not None and os.path.realpath(nv_path) == os.path.realpath(sub / DLL_NGX) and \
@@ -1876,6 +1907,9 @@ def opti_state(opti_dir, game_folder):
         "log_to_file": (ini_get(text, "Log", "LogToFile") or "auto").lower() == "true",
         "disabled": installed_kind(opti_dir) in ("ffx", "ngx") and bool((install_marker(opti_dir) or {}).get("disabled")),
         "official_route": (official_marker_data(opti_dir) or {}).get("route"),
+        # HelixSR Scaler: its version and the Steam launch option it needs (None: dxgi.dll needs none)
+        "scaler_version": scaler[1] if scaler else None,
+        "scaler_launch": scaler_launch_options(scaler[0]) if scaler else None,
         "hints": opti_hints(text, opti_dxgi_quirk(opti_dir)),
         **dx11_info(opti_dir),   # a DirectX 11 game: HelixSR can't run there
     }
@@ -2105,10 +2139,117 @@ def install_optiscaler_hlx(opti_dir, dll, text, prev, cur_sr):
         (" (AMD's FSR stays selectable after it)" if not full and (sub / FSR4_COPY_NAME).exists() else "")
 
 
+def scaler_record(opti_dir):
+    """(Scaler's DLL name in the game, Scaler's version) from HelixSR-Scaler.files, or None. The format is the bridge's
+    (scaler_record): "# version=..." and "name=..." lines; without a name line the DLL is dxgi.dll."""
+    p = Path(opti_dir) / SCALER_FILES
+    if not p.is_file():
+        return None
+    name, version = "dxgi.dll", None
+    for line in read_text(p).splitlines():
+        line = line.strip()
+        if line.startswith("# version="):
+            version = line.split("=", 1)[1].strip() or None
+        elif line.startswith("name="):
+            name = line.split("=", 1)[1].strip() or name
+    return name, version
+
+
+def scaler_launch_options(name):
+    """What Steam needs so Proton loads HelixSR Scaler from the game folder (the bridge's launch_options): nothing for
+    dxgi.dll, a DLL override for the other names Scaler picks when the game has its own dxgi.dll."""
+    if not name or name.lower() == "dxgi.dll":
+        return None
+    return f'WINEDLLOVERRIDES="{Path(name).stem}=n,b"'
+
+
+def bridge_python():
+    """A real Python for HelixSR's bridge (it also starts the release's setup with its own interpreter, so Decky's
+    bundled one won't do): the system's, else the portable one HelixSR's setup downloaded."""
+    for exe in (which("python3"), HOME / ".local/share/HelixSR/python/bin/python3"):
+        if exe and Path(exe).is_file() and os.access(exe, os.X_OK):
+            return str(exe)
+    raise RuntimeError("No Python found to run HelixSR's installer. Build HelixSR once (it downloads a Python), then "
+                       "try again.")
+
+
+def run_bridge(release, args, timeout=600):
+    """Runs the release's helixsr_bridge.py (HelixSR Desktop's backend, unmodified) with stdin closed and returns its
+    JSON answer; its error as a RuntimeError."""
+    release = Path(release)
+    try:
+        p = subprocess.run([bridge_python(), "-I", str(release / BRIDGE), str(release), *args], env=clean_env(),
+                           stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        raise RuntimeError("HelixSR's installer didn't finish in time. Nothing may have changed; press Check again.")
+    line = next((l for l in reversed(p.stdout.splitlines()) if l.startswith("{")), None)
+    try:
+        out = json.loads(line) if line else None
+    except ValueError:
+        out = None
+    if not isinstance(out, dict):
+        decky.logger.error("bridge %s: rc %s, stdout %r, stderr %r", args[:1], p.returncode, p.stdout[-2000:],
+                           p.stderr[-2000:])
+        raise RuntimeError("HelixSR's installer gave no answer. The debug report (More options) has the details.")
+    if not out.get("ok"):
+        decky.logger.error("bridge %s: %s %s", args[:1], out.get("error"), out.get("trace", ""))
+        err = str(out.get("error") or "unknown error")
+        if "network is not built" in err:
+            err = "HelixSR's DLSS network isn't built for this release yet: build it in HelixSR Installation above."
+        raise RuntimeError(err)
+    return out
+
+
+def scaler_release(prefer=None):
+    """The release folder to run the bridge from: the given or selected one when it can, else the newest that can."""
+    local = [v for v in local_versions() if v.get("scaler")]
+    for tag in (prefer, active_tag()):
+        v = next((x for x in local if x["tag"] == tag), None)
+        if v:
+            return Path(v["dir"])
+    if local:
+        return Path(local[0]["dir"])
+    raise RuntimeError("This needs a HelixSR 3.x release: download one in HelixSR Installation above.")
+
+
+def install_scaler(folder, tag=None):
+    """HelixSR Scaler (HelixSR's OptiScaler package) into a game, by HelixSR's own bridge, as HelixSR Desktop does it:
+    its files next to the game's .exe (as dxgi.dll, or another name when the game has its own), the game's replaced
+    files kept in HelixSR-Scaler-backup, everything listed in HelixSR-Scaler.files. Only into a game without another
+    OptiScaler and without a HelixSR install of the plugin's: those have their own sections."""
+    folder = Path(folder)
+    dlls, opti = scan_folder(folder)
+    for o in opti:
+        if not is_scaler(o):
+            raise RuntimeError("This game already has an OptiScaler: install HelixSR through it (OptiScaler section "
+                               "below). HelixSR Scaler would replace it.")
+    if any(is_helixsr(t) or is_helixsr(disabled_path(t)) for t in direct_targets(dlls)):
+        raise RuntimeError("HelixSR is installed in place of the game's FSR. Remove it there first.")
+    v = next((x for x in local_versions() if x["tag"] == (tag or active_tag())), None)
+    if not v or not v.get("scaler"):
+        raise RuntimeError("The selected HelixSR release has no HelixSR Scaler (it comes with HelixSR 3.x).")
+    if not v.get("dlss_built"):
+        raise RuntimeError(f"Build HelixSR {v['version']} first (HelixSR Installation above): HelixSR Scaler runs "
+                           f"its DLSS network.")
+    rel = Path(v["dir"])
+    out = run_bridge(rel, ["install", "--game", str(folder), "--way", "scaler", "--scaler", str(rel / SCALER_PKG)])
+    g = out.get("game") or {}
+    msg = f"HelixSR Scaler with HelixSR {v['version']} installed. In the game, select DLSS."
+    if g.get("launch_options"):
+        msg += " It also needs a Steam launch option: add it below."
+    return msg
+
+
+def uninstall_scaler(folder):
+    """HelixSR Scaler out of the game by HelixSR's bridge: its files go, the game's own come back from the backup."""
+    run_bridge(scaler_release(), ["remove", "--game", str(folder)])
+    return "HelixSR Scaler removed; the game's own files are back."
+
+
 def refuse_official(opti_dir):
     if is_scaler(opti_dir):
-        raise RuntimeError("HelixSR was installed here with HelixSR Scaler (HelixSR Desktop). Update or remove it "
-                           "with HelixSR Desktop; the plugin leaves it as it is.")
+        raise RuntimeError("HelixSR Scaler is installed here. Update or remove it with its buttons in the OptiScaler "
+                           "section.")
     data = official_marker_data(opti_dir)
     if data is not None:
         how = "as the game's DLSS (its experimental route)" if data.get("route") == "dlss" else \
@@ -3009,8 +3150,8 @@ class Plugin:
                 for o in opti:
                     st = opti_state(o, folder)
                     sub = o / OPTI_SUBDIR
-                    st["check"] = opti_hlx_check(o) if st.get("upscaler") in (HLX_NAME, HLX_FULL_NAME) \
-                        else helix_log_check(sub)
+                    st["check"] = scaler_check(o) if st["installed_kind"] == "scaler" else \
+                        opti_hlx_check(o) if st.get("upscaler") in (HLX_NAME, HLX_FULL_NAME) else helix_log_check(sub)
                     st["opti_log"] = opti_log_check(o)
                     st["ini"] = helix_ini_values(sub)
                     st["helix_folder"] = str(sub)
@@ -3131,6 +3272,23 @@ class Plugin:
                 return install_optiscaler_ngx(self._checked_opti(path), ngx)
             return install_optiscaler(self._checked_opti(path), built_dll(), release_ini(active_dir()),
                                       bool(keep_fsr4))
+        return await self._do(work)
+
+    async def install_scaler(self, path):
+        """path: the game's folder (HelixSR's bridge finds the .exe folder in it)."""
+        def work():
+            if not inside_library(Path(path)):
+                raise RuntimeError("Not a game folder inside a Steam library.")
+            self._guard(path, True)
+            return install_scaler(Path(path))
+        return await self._do(work)
+
+    async def uninstall_scaler(self, path):
+        def work():
+            if not inside_library(Path(path)):
+                raise RuntimeError("Not a game folder inside a Steam library.")
+            self._guard(path, False)
+            return uninstall_scaler(Path(path))
         return await self._do(work)
 
     async def uninstall_optiscaler(self, path):
