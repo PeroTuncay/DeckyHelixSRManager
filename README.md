@@ -355,6 +355,12 @@ and when it looks DirectX 11 only it shows "Not supported" instead of an install
 mode, switch to it (often a launch option or a setting) and press **Check again**. The check can be wrong; if you're
 sure the game runs on DirectX 12, use **Install anyway**.
 
+### Akimbot: HelixSR Scaler stays on "standby"
+
+With anti-aliasing set to FXAA, the game starts DLSS for a few seconds and then stops it, so HelixSR Scaler's menu shows
+"standby" although DLSS is selected. Set anti-aliasing to TAA, then turn DLSS off and on again in the game's settings.
+HLX DLSS then runs (tested on the Steam Deck OLED).
+
 ### The Witcher 3: "DLSS not supported" under Proton
 
 The game (5.0, DirectX 12) refuses DLSS when it detects Wine: it looks for `wine_get_version` and then never starts
