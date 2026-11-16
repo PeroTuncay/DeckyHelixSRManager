@@ -8,19 +8,21 @@ from support import HOME, FakeHomeTest, main, write
 from test_hlx_fsr4 import OPTI_INI, OptiScalerInstallTest, built_20, release
 
 
-def fake_full(path, built=True):
-    """A stand-in HLX FSR 4 Full DLL: its start-up log line in the code, its data behind HLXFULL2."""
-    data = b"MZ" + b"\0" * 64 + b"HLX FSR 4: full=%d reuse=%d dir=%s\0"
+def fake_full(path, built=True, one_file=False):
+    """A stand-in HLX FSR 4 Full DLL: its start-up log line in the code, its data behind HLXFULL2. Up to 3.3.0 it names
+    AMD's FSR SDK DLL it runs on; from 3.4.0 (one_file) it names none."""
+    data = b"MZ" + b"\0" * 64 + (b"HLX FSR 4: reuse=%d dir=%s\0" if one_file else
+                                b"HLX FSR 4: full=%d reuse=%d dir=%s\0%s\\amd_fidelityfx_upscaler_dx12.amd.dll\0")
     if built:
         payload = b"F" * 32
         data += payload + main.HLX_FULL_MAGIC + struct.pack("<Q", len(payload)) + b"\0" * 8
     return write(path, data)
 
 
-def release_with_full(built=True, sdk=True):
+def release_with_full(built=True, sdk=True, one_file=False):
     d = release(built=True)
     ffx = d / main.RELEASE_FULL_DIR
-    fake_full(ffx / "amd_fidelityfx_upscaler_dx12.dll", built)
+    fake_full(ffx / "amd_fidelityfx_upscaler_dx12.dll", built, one_file)
     write(ffx / main.HLX_FULL_INI, "[HLX]\nDeepReuse = exact\n")
     if sdk:
         write(d / main.RELEASE_SDK_DLL, b"MZ AMD FSR SDK 2.4.0 upscaler")
@@ -46,6 +48,13 @@ class ReleaseTest(FakeHomeTest):
         d = release_with_full()
         (d / main.RELEASE_SDK_DLL).unlink()
         self.assertIsNone(main.release_full_dll(d))
+
+    def test_340_one_file_needs_no_amd_dll(self):
+        d = release_with_full(sdk=False, one_file=True)
+        full = main.release_full_dll(d)
+        self.assertEqual(main.upscaler_name(full), "HLX FSR 4 Full")
+        self.assertFalse(main.full_needs_amd(full))
+        self.assertEqual(main.hlx_release_dir(full), d)
 
     def test_listed(self):
         release_with_full()
@@ -101,6 +110,15 @@ class InstallTest(FakeHomeTest):
         main.uninstall_optiscaler(self.o)
         self.assertEqual((self.o / "OptiScaler.ini").read_text(), OPTI_INI)
 
+    def test_340_one_file_gets_no_amd_dll_and_keeps_the_games_fsr4(self):
+        fake_full(self.d / main.RELEASE_FULL_DIR / "amd_fidelityfx_upscaler_dx12.dll", one_file=True)
+        (self.d / main.RELEASE_SDK_DLL).unlink()
+        self.assertEqual(self.install(full=True)["upscaler"], "HLX FSR 4 Full")
+        self.assertFalse((self.sub / main.FSR4_COPY_NAME).exists())
+        write(self.sub / main.FSR4_COPY_NAME, b"MZ the game's FSR 4")   # from an HLX FSR 4 install before
+        self.install(full=True)
+        self.assertEqual((self.sub / main.FSR4_COPY_NAME).read_bytes(), b"MZ the game's FSR 4")
+
     def test_refused_when_the_release_has_none(self):
         main.save_settings({"helix_dir": str(HOME / "HelixSR"), "active": "v2.0.0"})
         r = asyncio.run(main.Plugin().install_optiscaler(str(self.o), True, True, False, None, True))
@@ -131,6 +149,11 @@ class LogTest(FakeHomeTest):
 
     def test_amds_fsr_missing(self):
         self.assertEqual(self.check("HLX FSR 4: full=1 reuse=0 dir=Z:\\g\ncannot load AMD's FSR (126)\n")["status"], "error")
+
+    def test_340_start_and_pipeline_error(self):
+        self.assertEqual(self.check("HLX FSR 4: reuse=0 dir=Z:\\g\n")["status"], "loaded")
+        self.assertEqual(self.check("create: max render 1280x800 output 1280x800 flags 0x1 own kernels=1\n"
+                                    "runtime: pipeline 0123456789ab failed\n")["status"], "error")
 
     def test_settings_not_covered(self):
         c = self.check("create: max render 1280x800 output 1280x800 flags 0x1 own kernels=1\n"

@@ -65,7 +65,7 @@ OptiScaler.
 > HelixSR as `nvngx.dll` next to the game's exe), which the plugin doesn't offer itself. A setup whose layout the plugin
 > doesn't recognize isn't run.
 >
-> **From 3.0** (tested with 3.1.0 and 3.2.0; 3.3.0 checked), the DLL a release puts into games is **HLX FSR 4**: AMD's FSR 4 network on
+> **From 3.0** (tested with 3.1.0 and 3.2.0; 3.3.0 and 3.4.0 checked), the DLL a release puts into games is **HLX FSR 4**: AMD's FSR 4 network on
 > HelixSR's pipeline, as `HLX-FSR4/amd_fidelityfx_upscaler_dx12.dll`. Its setup builds HLX FSR 4's shaders from AMD's
 > FSR 4 driver file, but downloads that file only after a yes on a terminal. So the plugin runs the setup as before
 > (still never with `--yes`), then a second step: the release's `helixsr_setup.py --fg-only --no-fg --yes`, which only
@@ -75,10 +75,11 @@ OptiScaler.
 > decides once, early, that the Deck's GPU can't do DLSS and quietly uses its FSR 2.1.2 instead. So the plugin doesn't
 > offer HLX DLSS; it offers HelixSR 2.0.0's network next to HLX FSR 4 instead.
 >
-> **From 3.2.1** (checked with 3.3.0) a release also has **HLX FSR 4 Full**: AMD's full FSR 4 network, sharper and slower
+> **From 3.2.1** (checked with 3.3.0 and 3.4.0) a release also has **HLX FSR 4 Full**: AMD's full FSR 4 network, sharper and slower
 > than HLX FSR 4. HelixSR ships it for HelixSR Scaler's list only
 > (`helixsr-scaler/OptiScaler/custom/HLX FSR 4 Full/ffx/`); the plugin offers it in a game's own OptiScaler next to
-> HLX FSR 4, with the AMD FSR SDK DLL the release ships next to it. HelixSR lists the Steam Deck as expected to work
+> HLX FSR 4. Up to 3.3.0 it runs on the AMD FSR SDK DLL the release ships, which the plugin puts next to it; from
+> 3.4.0 it is a single file. HelixSR lists the Steam Deck as expected to work
 > but hasn't tested it there, so the plugin marks it experimental.
 
 ## Installation
@@ -258,8 +259,8 @@ next to HelixSR, since HelixSR has none of its own; OptiScaler's own frame gener
    `amd_fidelityfx_dx12.original.dll` so frame generation keeps working. HLX FSR 4 (3.x) is only an upscaler: it
    goes in as `amd_fidelityfx_upscaler_dx12.dll` (`FfxDx12SRPath`), `FfxDx12Path` stays the game's, and AMD's FSR is
    always copied in as `amd_fidelityfx_upscaler_dx12.amd.dll`, which HLX FSR 4 lists after itself. HLX FSR 4 Full goes
-   in the same way, but runs on AMD's FSR SDK DLL from the release, which is copied in under that name instead, plus its
-   `hlx_fsr4.ini` (an edited one is kept). HelixSR 2.0.0 next
+   in the same way, plus its `hlx_fsr4.ini` (an edited one is kept). Up to 3.3.0 it runs on AMD's FSR SDK DLL from the
+   release, which is copied in under that name instead; from 3.4.0 it needs no AMD DLL. HelixSR 2.0.0 next
    to a 3.x release is installed exactly like 2.0.0 on its own.
 5. **Setup progress**: while the setup runs, a progress bar with the current step (in step 5 the compiled shaders,
    e.g. 41/72), the elapsed time, whether it is actually working (CPU use of its processes) and what runs right now.
