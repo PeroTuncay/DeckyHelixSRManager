@@ -128,6 +128,17 @@ HLX_LOG = "HLX_FSR.log"          # HLX FSR 4's log, next to its DLL
 HLX_NAME = "HLX FSR 4"
 HLX_DLSS_NAME = "HLX DLSS"
 RELEASE_NGX_DLL = "HelixSR/helixsr.dll"
+# 3.2.1+: HLX FSR 4 Full (AMD's full FSR 4 network), which HelixSR ships for HelixSR Scaler's list only. The plugin puts
+# it into a game's own OptiScaler like HLX FSR 4. Up to 3.3.0 it runs on AMD's FSR SDK DLL, which it names
+# (HLX_FULL_AMD) and the plugin copies from the release next to it (FSR4_COPY_NAME); from 3.4.0 it is one file.
+HLX_FULL_MARK = b"HLX FSR 4: "   # its start-up log line, in its code ("full=" up to 3.3.0, "reuse=" from 3.4.0)
+HLX_FULL_AMD = b"amd_fidelityfx_upscaler_dx12.amd.dll"
+HLX_FULL_MAGIC = b"HLXFULL2"          # its data, at the same place as HLX_DATA_MAGIC
+HLX_FULL_NAME = "HLX FSR 4 Full"
+HLX_FULL_LOG = "hlx_fsr4.log"
+HLX_FULL_INI = "hlx_fsr4.ini"
+RELEASE_FULL_DIR = "helixsr-scaler/OptiScaler/custom/HLX FSR 4 Full/ffx"
+RELEASE_SDK_DLL = "helixsr-scaler/OptiScaler/" + "amd_fidelityfx_upscaler_dx12.amd.dll"
 
 
 def release_dll(d):
@@ -152,6 +163,14 @@ def release_ngx_dll(d):
     """3.0+: HLX DLSS (HelixSR/helixsr.dll) in a release that has HLX FSR 4, or None."""
     p = Path(d) / RELEASE_NGX_DLL
     return p if (Path(d) / HLX_DIR).is_dir() and p.exists() and is_helixsr(p) else None
+
+
+def release_full_dll(d):
+    """3.2.1+: HLX FSR 4 Full's DLL in a release, with its data (and up to 3.3.0 AMD's FSR SDK DLL it runs on), or
+    None."""
+    p = Path(d) / RELEASE_FULL_DIR / NAMES[0]
+    ok = is_hlx_full(p) and hlx_built(p) and (not full_needs_amd(p) or (Path(d) / RELEASE_SDK_DLL).is_file())
+    return p if ok else None
 
 
 def release_ini(d):
@@ -229,6 +248,8 @@ def local_versions():
                         "built": has_network(dll), "setup_script": (d / "helixsr-setup.sh").exists(),
                         # 3.0+: HLX DLSS built (the setup builds it before HLX FSR 4, so it can be ready alone)
                         "dlss_built": bool(release_ngx_dll(d)) and has_network(release_ngx_dll(d)),
+                        # 3.2.1+: HLX FSR 4 Full comes with it (for OptiScaler)
+                        "full": bool(upscaler_name(dll)) and release_full_dll(d) is not None,
                         # 3.0-3.1: building HLX FSR 4 downloads AMD's driver package (3.2.0+ ships it built)
                         "amd_download": bool(upscaler_name(dll)) and hlx_amd_download(d),
                         "verified": bool(meta.get("verified")),
@@ -279,20 +300,41 @@ def clean_env():
 
 
 def is_helixsr(path):
-    """HelixSR's DLL, or HLX FSR 4's (HelixSR's FSR drop-in from 3.0 on)."""
+    """HelixSR's DLL, or HLX FSR 4's (HelixSR's FSR drop-in from 3.0 on) or HLX FSR 4 Full's."""
     # "HelixSR 1.4.1" from 1.3 on; 1.2.0 only names itself "HelixSR (3.1.5)" (its FSR interface version)
     try:
         with open(path, "rb") as f:
             head = f.read(4 << 20)
-        return re.search(rb"HelixSR (\d+\.\d+\.\d+|\(3\.1\.\d+\))", head) is not None or HLX_MARK in head
+        return re.search(rb"HelixSR (\d+\.\d+\.\d+|\(3\.1\.\d+\))", head) is not None or HLX_MARK in head or \
+            HLX_FULL_MARK in head
     except OSError:
         return False
 
 
 def is_hlx(path):
+    """HLX FSR 4 or HLX FSR 4 Full: an FSR upscaler DLL without helixsr.ini that names no HelixSR version."""
     try:
         with open(path, "rb") as f:
-            return HLX_MARK in f.read(4 << 20)
+            head = f.read(4 << 20)
+        return HLX_MARK in head or HLX_FULL_MARK in head
+    except OSError:
+        return False
+
+
+def is_hlx_full(path):
+    try:
+        with open(path, "rb") as f:
+            head = f.read(4 << 20)
+        return HLX_FULL_MARK in head and HLX_MARK not in head
+    except OSError:
+        return False
+
+
+def full_needs_amd(path):
+    """HLX FSR 4 Full up to 3.3.0 runs on AMD's FSR SDK DLL next to it; from 3.4.0 it is one file and names none."""
+    try:
+        with open(path, "rb") as f:
+            return HLX_FULL_AMD in f.read(4 << 20)
     except OSError:
         return False
 
@@ -302,7 +344,7 @@ def hlx_built(path):
     try:
         with open(path, "rb") as f:
             f.seek(-24, os.SEEK_END)
-            return f.read(8) == HLX_DATA_MAGIC
+            return f.read(8) in (HLX_DATA_MAGIC, HLX_FULL_MAGIC)
     except OSError:
         return False
 
@@ -317,7 +359,7 @@ def helix_version(path):
     m = re.search(rb"\x00HelixSR (\d+\.\d+\.\d+)\x00", head)
     if m:
         return m.group(1).decode()
-    if HLX_MARK in head:
+    if HLX_MARK in head or HLX_FULL_MARK in head:
         for name in (INSTALL_MARKER, OPTI_MARKER):
             v = (read_json(Path(path).parent / name) or {}).get("helixsr")
             if isinstance(v, str) and re.fullmatch(r"\d+\.\d+\.\d+", v):
@@ -331,7 +373,7 @@ def upscaler_name(path):
     if not path:
         return None
     if is_hlx(path):
-        return HLX_NAME
+        return HLX_FULL_NAME if is_hlx_full(path) else HLX_NAME
     if Path(path).name.lower() in (DLL_NGX, "helixsr.dll") and version_key(helix_version(path)) >= (3,):
         return HLX_DLSS_NAME
     return None
@@ -1242,7 +1284,7 @@ def helix_state():
             "downloaded": cur is not None, "version": cur["version"] if cur else None,
             "built": bool(cur and cur["built"]), "setup_script": bool(cur and cur["setup_script"]),
             "kind": cur["kind"] if cur else None, "upscaler": cur["upscaler"] if cur else None,
-            "dlss_built": bool(cur and cur["dlss_built"])}
+            "dlss_built": bool(cur and cur["dlss_built"]), "full": bool(cur and cur["full"])}
 
 
 def built_dll(tag=None):
@@ -1266,7 +1308,7 @@ def own_network_dll(tag):
         raise RuntimeError(f"HelixSR {tag} isn't downloaded.")
     dll = built_dll(tag)
     if is_hlx(dll) or dll_kind(dll) != "ffx":
-        raise RuntimeError(f"HelixSR {tag} has no network of its own to install next to HLX FSR 4.")
+        raise RuntimeError(f"HelixSR {tag} has no network of its own to install next to HLX FSR 4 Lite.")
     return dll
 
 
@@ -1377,6 +1419,13 @@ HLX_RUNNING = re.compile(r"own runtime active")
 HLX_ERRORS = re.compile(r"shaders are not built yet|cannot run the own runtime|could not be built|own runtime build "
                         r"failed|create failed|frame skipped|failed$")
 HLX_FALLBACK = re.compile(r"AMD's original instead|using AMD provider|FSR \S+ requested: AMD's original")
+# HLX FSR 4 Full (hlx_fsr4.log): its own runtime starts at "create:"; up to 3.3.0 AMD's FSR (the .amd.dll next to it)
+# gets what that runtime doesn't cover
+HLX_FULL_RUNNING = re.compile(r"own runtime: family|create: max render")
+HLX_FULL_ERRORS = re.compile(r"data on this DLL is damaged|cannot load AMD's FSR|runtime: (root signature failed|no set|"
+                             r"missing shader|resources failed|pipeline \S+ failed)|no runtime table|no kernel table|"
+                             r"kernel dispatch failed")
+HLX_FULL_FALLBACK = re.compile(r"not covered by the own runtime|the own runtime does not cover")
 
 
 def hlx_log_lines(log, limit=400):
@@ -1394,27 +1443,31 @@ def hlx_log_lines(log, limit=400):
     return out
 
 
-def hlx_log_check(log, info, lines=None):
+def hlx_log_check(log, info, lines=None, full=False):
     """HLX_FSR.log (or HLX FSR 4's lines from OptiScaler.log): "own runtime active" when HLX FSR 4 upscales; AMD's FSR
-    takes over when its shaders aren't built, the GPU can't run them or a request isn't covered (the log says so)."""
+    takes over when its shaders aren't built, the GPU can't run them or a request isn't covered (the log says so).
+    full: HLX FSR 4 Full's hlx_fsr4.log, with its own lines and the render size of its frames."""
     lines = tail_lines(log) if lines is None else lines
     text = "\n".join(lines)
-    if HLX_ERRORS.search(text):
+    errors, running, fallback = (HLX_FULL_ERRORS, HLX_FULL_RUNNING, HLX_FULL_FALLBACK) if full else \
+        (HLX_ERRORS, HLX_RUNNING, HLX_FALLBACK)
+    if errors.search(text):
         status = "error"
-    elif HLX_RUNNING.search(text):
-        status = "fallback" if HLX_FALLBACK.search(text) else "running"
-    elif HLX_FALLBACK.search(text):
+    elif running.search(text):
+        status = "fallback" if fallback.search(text) else "running"
+    elif fallback.search(text):
         status = "fallback"
     else:
         status = "loaded"
-    hl = [l.strip() for l in lines if re.search(r"own runtime|GPU|create|AMD's original|not built|HLX FSR 4 \(", l)]
+    hl = [l.strip() for l in lines if re.search(r"own runtime|GPU|create|AMD's original|not built|HLX FSR 4 \(|"
+                                                r"HLX FSR 4: full|INT8|AMD's FSR|AMD's kernels|damaged|runtime", l)]
     return {"exists": True, "mtime": info["mtime"], "status": status, "highlights": hl[-12:], "tail": lines[-15:],
-            "last_upscale": None, "log": Path(log).name}
+            "last_upscale": last_upscale(lines) if full else None, "log": Path(log).name}
 
 
 def opti_hlx_check(opti_dir):
-    """The check for HLX FSR 4 in a game's OptiScaler: HLX_FSR.log next to it if it wrote one, else its lines in
-    OptiScaler.log (OptiScaler writes that file only with LogToFile = true)."""
+    """The check for HLX FSR 4 in a game's OptiScaler: HLX_FSR.log (HLX FSR 4 Full: hlx_fsr4.log) next to it if it
+    wrote one, else its lines in OptiScaler.log (OptiScaler writes that file only with LogToFile = true)."""
     sub = Path(opti_dir) / OPTI_SUBDIR
     check = helix_log_check(sub)
     if check["exists"]:
@@ -1426,6 +1479,10 @@ def opti_hlx_check(opti_dir):
 
 
 def helix_log_check(folder):
+    full_log = Path(folder) / HLX_FULL_LOG
+    full_info = file_info(full_log)
+    if full_info and any(is_hlx_full(Path(folder) / n) for n in NAMES):
+        return hlx_log_check(full_log, full_info, full=True)
     hlx_log = Path(folder) / HLX_LOG
     hlx_info = file_info(hlx_log)
     if hlx_info and any(is_hlx(Path(folder) / n) for n in NAMES):
@@ -1477,7 +1534,8 @@ def last_upscale(lines):
             out = {**upscale_sizes(*map(int, m.groups())), "network": None, "per_frame": False}
             continue
         m = re.search(r"dispatch \d+: render (\d+)x(\d+) -> (\d+)x(\d+)", line) or \
-            re.search(r"ngx: feature \d+ eval \d+: render (\d+)x(\d+) -> (\d+)x(\d+)", line)
+            re.search(r"ngx: feature \d+ eval \d+: render (\d+)x(\d+) -> (\d+)x(\d+)", line) or \
+            re.search(r"frame \d+ psos \d+ render (\d+)x(\d+) out (\d+)x(\d+)", line)   # HLX FSR 4 Full
         if m and "dry run" not in line:
             # also without a create line (it can be older than the part of the log that is read)
             out = {**(out or {"network": None}), **upscale_sizes(*map(int, m.groups())), "per_frame": True}
@@ -1989,17 +2047,33 @@ def install_optiscaler(opti_dir, dll, ini_src, keep_fsr4):
     return "OptiScaler now uses HelixSR" + (" (FSR 4 stays selectable)" if (sub / FSR4_COPY_NAME).exists() else "")
 
 
+def hlx_release_dir(dll):
+    """The release folder an HLX FSR 4 (Full) DLL comes from."""
+    return Path(dll).parents[len(Path(RELEASE_FULL_DIR).parts) if is_hlx_full(dll) else 1]
+
+
 def install_optiscaler_hlx(opti_dir, dll, text, prev, cur_sr):
-    """HLX FSR 4 (3.0+) as OptiScaler's FSR upscaler (FfxDx12SRPath), as HelixSR Scaler carries it. It is an upscaler
-    only: OptiScaler's FidelityFX DLL (FfxDx12Path, frame generation) stays the game's. AMD's own FSR goes next to it
-    as amd_fidelityfx_upscaler_dx12.amd.dll, which HLX FSR 4 lists after itself and hands what it doesn't cover."""
+    """HLX FSR 4 (3.0+) or HLX FSR 4 Full (3.2.1+) as OptiScaler's FSR upscaler (FfxDx12SRPath), as HelixSR Scaler
+    carries them. They are upscalers only: OptiScaler's FidelityFX DLL (FfxDx12Path, frame generation) stays the
+    game's. AMD's own FSR goes next to them as amd_fidelityfx_upscaler_dx12.amd.dll: HLX FSR 4 lists it after itself and
+    hands it what it doesn't cover; HLX FSR 4 Full up to 3.3.0 runs on it, so it gets the FSR SDK DLL its release
+    ships (from 3.4.0 it needs none, and a copy already there stays for HLX FSR 4)."""
     sub = opti_dir / OPTI_SUBDIR
+    full = is_hlx_full(dll)
+    name = HLX_FULL_NAME if full else HLX_NAME
+    rel = hlx_release_dir(dll)
     copy_helix(dll, sub / NAMES[0])
-    # what an earlier HelixSR (up to 2.0) put here for OptiScaler's FidelityFX DLL and HelixSR's settings
+    # what an earlier HelixSR (up to 2.0) put here for OptiScaler's FidelityFX DLL and HelixSR's settings, and the
+    # other HLX FSR 4's log
     for n in (NAMES[1], "amd_fidelityfx_dx12.original.dll", "amd_fidelityfx_framegeneration_dx12.dll", "helixsr.ini",
-              "helixsr.log"):
+              "helixsr.log", HLX_LOG if full else HLX_FULL_LOG):
         (sub / n).unlink(missing_ok=True)
-    if cur_sr and not is_helixsr(cur_sr):
+    if full:
+        if full_needs_amd(dll):
+            shutil.copyfile(rel / RELEASE_SDK_DLL, sub / FSR4_COPY_NAME)
+        if not (sub / HLX_FULL_INI).exists():   # its settings (DeepReuse): an edited copy stays
+            shutil.copyfile(Path(dll).parent / HLX_FULL_INI, sub / HLX_FULL_INI)
+    elif cur_sr and not is_helixsr(cur_sr):
         shutil.copyfile(cur_sr, sub / FSR4_COPY_NAME)
     wanted = {
         ("Upscalers", "Dx12Upscaler"): opti_upscaler_value(text),
@@ -2025,10 +2099,10 @@ def install_optiscaler_hlx(opti_dir, dll, text, prev, cur_sr):
         text = ini_set(text, s, k, v)
     write_text(opti_dir / "OptiScaler.ini", text)
     marker.write_text(json.dumps({"previous": prev, "set": {f"{s}/{k}": v for (s, k), v in wanted.items()},
-                                  "helixsr": release_version(dll.parent.parent), "upscaler": HLX_NAME},
+                                  "helixsr": release_version(rel), "upscaler": name},
                                  indent=1) + "\n")
-    return f"OptiScaler now uses {HLX_NAME}" + \
-        (" (AMD's FSR stays selectable after it)" if (sub / FSR4_COPY_NAME).exists() else "")
+    return f"OptiScaler now uses {name if full else HLX_NAME + ' Lite'}" + \
+        (" (AMD's FSR stays selectable after it)" if not full and (sub / FSR4_COPY_NAME).exists() else "")
 
 
 def refuse_official(opti_dir):
@@ -2935,7 +3009,8 @@ class Plugin:
                 for o in opti:
                     st = opti_state(o, folder)
                     sub = o / OPTI_SUBDIR
-                    st["check"] = opti_hlx_check(o) if st.get("upscaler") == HLX_NAME else helix_log_check(sub)
+                    st["check"] = opti_hlx_check(o) if st.get("upscaler") in (HLX_NAME, HLX_FULL_NAME) \
+                        else helix_log_check(sub)
                     st["opti_log"] = opti_log_check(o)
                     st["ini"] = helix_ini_values(sub)
                     st["helix_folder"] = str(sub)
@@ -3029,10 +3104,11 @@ class Plugin:
             return uninstall_direct(self._checked_target(path), release_ini(active_dir()))
         return await self._do(work)
 
-    async def install_optiscaler(self, path, keep_fsr4, ignore_dx11=False, dlss=False, tag=None):
+    async def install_optiscaler(self, path, keep_fsr4, ignore_dx11=False, dlss=False, tag=None, full=False):
         """dlss: 3.0+'s HLX DLSS as OptiScaler's DLSS (NvngxPath, like 1.5) instead of HLX FSR 4 as its FSR (no longer
         offered in the panel: stock OptiScaler 0.10 never counts the Deck's GPU as DLSS-capable). tag: a downloaded
-        release with HelixSR's own network (2.0.0) instead of the selected one, next to a 3.x release."""
+        release with HelixSR's own network (2.0.0) instead of the selected one, next to a 3.x release. full: the
+        selected release's HLX FSR 4 Full (3.2.1+) instead of HLX FSR 4."""
         def work():
             self._guard(path, True)
             if not ignore_dx11:   # "Install anyway": the user knows the game runs on DirectX 12
@@ -3041,6 +3117,11 @@ class Plugin:
                 dll = own_network_dll(tag)
                 return install_optiscaler(self._checked_opti(path), dll, release_ini(version_dir(tag)),
                                           bool(keep_fsr4))
+            if full:
+                dll = release_full_dll(active_dir())
+                if not dll:
+                    raise RuntimeError(f"HelixSR {active_tag()} has no {HLX_FULL_NAME}.")
+                return install_optiscaler(self._checked_opti(path), dll, release_ini(active_dir()), True)
             if dlss:
                 ngx = release_ngx_dll(active_dir())
                 if not ngx:
