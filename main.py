@@ -1308,7 +1308,7 @@ def own_network_dll(tag):
         raise RuntimeError(f"HelixSR {tag} isn't downloaded.")
     dll = built_dll(tag)
     if is_hlx(dll) or dll_kind(dll) != "ffx":
-        raise RuntimeError(f"HelixSR {tag} has no network of its own to install next to HLX FSR 4.")
+        raise RuntimeError(f"HelixSR {tag} has no network of its own to install next to HLX FSR 4 Lite.")
     return dll
 
 
@@ -2101,7 +2101,7 @@ def install_optiscaler_hlx(opti_dir, dll, text, prev, cur_sr):
     marker.write_text(json.dumps({"previous": prev, "set": {f"{s}/{k}": v for (s, k), v in wanted.items()},
                                   "helixsr": release_version(rel), "upscaler": name},
                                  indent=1) + "\n")
-    return f"OptiScaler now uses {name}" + \
+    return f"OptiScaler now uses {name if full else HLX_NAME + ' Lite'}" + \
         (" (AMD's FSR stays selectable after it)" if not full and (sub / FSR4_COPY_NAME).exists() else "")
 
 

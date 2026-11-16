@@ -2,10 +2,10 @@
 
 A Decky Loader plugin for the Steam Deck that installs [HelixSR](https://github.com/lonewolf0622/HelixSR) into your
 games, per game, and checks that it actually runs. HelixSR runs NVIDIA's DLSS upscaling network on AMD GPUs like the
-Deck's. From 3.0, HelixSR's releases put **HLX FSR 4** (AMD's FSR 4 network on HelixSR's pipeline) into games instead;
-the plugin installs that and offers HelixSR 2.0.0's DLSS network next to it. This plugin contains no HelixSR, NVIDIA or
-AMD files: it downloads the official HelixSR release from GitHub and runs HelixSR's own setup, which builds everything
-locally on your Deck.
+Deck's. From 3.0, HelixSR's releases put **HLX FSR 4** (AMD's FSR 4 network on HelixSR's pipeline; the plugin calls it
+HLX FSR 4 Lite, next to HLX FSR 4 Full) into games instead; the plugin installs that and offers HelixSR 2.0.0's DLSS
+network next to it. This plugin contains no HelixSR, NVIDIA or AMD files: it downloads the official HelixSR release
+from GitHub and runs HelixSR's own setup, which builds everything locally on your Deck.
 
 HelixSR is developed by [lonewolf0622](https://github.com/lonewolf0622/HelixSR). This plugin is an independent
 integration, not affiliated with HelixSR, NVIDIA, AMD, OptiScaler or Decky.
@@ -144,11 +144,14 @@ your account banned and only installs after you turn on **I understand the risk*
   shows the key the game's `OptiScaler.ini` uses).
   `Dx12Upscaler` is set to what the game's OptiScaler expects (`fsr31` on OptiScaler 0.9.4).
 - **Game with OptiScaler (HelixSR 3.x):** the **OptiScaler** section has two buttons:
-  - **Install HLX FSR 4 … via OptiScaler**. OptiScaler's menu then lists "HLX FSR 4" first under Upscalers → FFX
+  - **Install HLX FSR 4 Lite … via OptiScaler**. OptiScaler's menu then lists "HLX FSR 4" first under Upscalers → FFX
     Upscaler, with AMD's own FSR after it, for comparing. HLX FSR 4 hands AMD's FSR anything it doesn't cover itself.
   - **Install HLX FSR 4 Full … via OptiScaler (experimental)**, from HelixSR 3.3.0: AMD's full FSR 4 network, sharper
-    and slower than HLX FSR 4. Its settings file `hlx_fsr4.ini` goes next to it (`DeepReuse`; on the Deck only `exact`
-    applies). If it doesn't upscale on your device, switch back with **Use HLX FSR 4 … instead**.
+    and slower than HLX FSR 4 Lite. Tested on a Steam Deck OLED (HelixSR 3.4.0, The Witcher 3): it works and looks
+    sharper, but runs noticeably slower than HLX FSR 4 Lite (how much depends on the game and settings). Its settings file `hlx_fsr4.ini` goes
+    next to it (`DeepReuse`; on the Deck only `exact` applies). In OptiScaler's menu it shows as "FSR 4.1.2" (its own
+    name), not as "HLX FSR 4". If it doesn't upscale on your device or is too slow, switch back with **Use HLX FSR 4
+    Lite … instead**.
   - **Install HelixSR 2.0.0 (DLSS network) via OptiScaler**, once 2.0.0 is downloaded and built (otherwise the section
     says how to get it).
 
@@ -178,7 +181,7 @@ plain words:
   what to select in the game (DLSS through OptiScaler, AMD FSR for a game's own FSR 3.1).
 - **Installed, but HelixSR can't upscale** (red, also a red frame in the game): that copy has no built network.
 - With HLX FSR 4: **Installed, AMD's FSR stepped in** (HLX FSR 4 handed some upscaling to AMD's own FSR) or
-  **Installed, but HLX FSR 4 can't upscale** (AMD's own FSR runs instead, for example because the shaders aren't
+  **Installed, but HLX FSR 4 Lite can't upscale** (AMD's own FSR runs instead, for example because the shaders aren't
   built). HLX FSR 4 shows no red frame. It logs to `HLX_FSR.log` next to it, or to `OptiScaler.log` when it runs
   inside OptiScaler; the plugin reads either. HLX FSR 4 Full logs to `hlx_fsr4.log` next to it; when it can't run,
   the status says **Installed, but HLX FSR 4 Full can't upscale**.

@@ -174,10 +174,13 @@ function ownNetworkRelease(versions: LocalVersion[] | undefined): Active["own_ne
 }
 
 const FULL_NAME = "HLX FSR 4 Full";
+// HelixSR calls it "HLX FSR 4"; the panel says "Lite" so it reads clearly apart from HLX FSR 4 Full
+const LITE_NAME = "HLX FSR 4 Lite";
+const shown = (upscaler: string | null | undefined) => (upscaler === "HLX FSR 4" ? LITE_NAME : upscaler);
 
-// "HelixSR 3.0.0 (HLX FSR 4)": from 3.0 games get HLX FSR 4 rather than HelixSR's own network
+// "HelixSR 3.0.0 (HLX FSR 4 Lite)": from 3.0 games get HLX FSR 4 rather than HelixSR's own network
 function helixName(version: string | null | undefined, upscaler?: string | null) {
-  return `HelixSR ${version ?? ""}${upscaler ? ` (${upscaler})` : ""}`.replace("  ", " ");
+  return `HelixSR ${version ?? ""}${upscaler ? ` (${shown(upscaler)})` : ""}`.replace("  ", " ");
 }
 
 function versionAtLeast(v: string | null | undefined, major: number, minor: number) {
@@ -353,7 +356,7 @@ const mono: React.CSSProperties = {
 };
 const STATUS: Record<Check["status"], { color: string; text: string }> = {
   running: { color: "#5ba32b", text: "HelixSR network running" },
-  fallback: { color: "#e5a50a", text: "HLX FSR 4 loaded, but AMD's own FSR upscaled (see the log lines)" },
+  fallback: { color: "#e5a50a", text: "HLX FSR 4 Lite loaded, but AMD's own FSR upscaled (see the log lines)" },
   error: { color: "#d94126", text: "HelixSR loaded, but the network is NOT running" },
   loaded: { color: "#e5a50a", text: "HelixSR loaded, no upscaling yet" },
   none: { color: "#8b929a", text: "HelixSR not loaded yet" },
@@ -878,11 +881,11 @@ function HelixSection({ state, refresh }: { state: HelixState | null; refresh: (
           "Python and Microsoft's shader compiler; HelixSR's setup builds the network into the HelixSR DLL and NVIDIA's " +
           "DLL is deleted again. " +
           (local.get(tag)?.amd_download
-            ? "Then HLX FSR 4 is built (what games get from this release): about 420 MB of AMD's driver package " +
+            ? "Then HLX FSR 4 Lite is built (what games get from this release): about 420 MB of AMD's driver package " +
               "(AMD Software 26.10.1) are downloaded from AMD (AMD's license applies), only its FSR 4 file is read and " +
               "checked, nothing is installed. This adds several minutes. "
             : local.get(tag)?.upscaler
-              ? "HLX FSR 4 (what games get from this release) comes built with it. "
+              ? "HLX FSR 4 Lite (what games get from this release) comes built with it. "
               : "") +
           "HelixSR's own game installer is never answered, so it changes no game. The result is for this device only, " +
           "don't share it."
@@ -1602,7 +1605,7 @@ function OptiItem({
       ) : !o.configured && hlxRelease && !installed ? (
         <>
           <Note>
-            HelixSR {active.version} brings HLX FSR 4: AMD's FSR 4 network on HelixSR's pipeline
+            HelixSR {active.version} brings HLX FSR 4 Lite: AMD's FSR 4 network on HelixSR's pipeline
             {active.full ? ", and HLX FSR 4 Full: AMD's full FSR 4 network, sharper and slower (experimental on the Deck)" : ""}.
             HelixSR's own DLSS network comes from HelixSR {own?.version ?? "2.0.0"}
             {own
@@ -1627,7 +1630,7 @@ function OptiItem({
               disabled={!active.ready || busy || !!guard.install}
               onClick={() => run(() => installOptiscaler(o.dir, true))}
             >
-              {active.ready ? `Install HLX FSR 4 ${active.version} via OptiScaler` : notReady(active)}
+              {active.ready ? `Install ${LITE_NAME} ${active.version} via OptiScaler` : notReady(active)}
             </ButtonItem>
           </PanelSectionRow>
           {active.ready && active.full && (
@@ -1668,7 +1671,7 @@ function OptiItem({
                 >
                   Switch to{" "}
                   {hlxRelease
-                    ? helixName(active.version, hlxDlss ? "HLX DLSS" : keepFull ? FULL_NAME : "HLX FSR 4")
+                    ? helixName(active.version, hlxDlss ? "HLX DLSS" : keepFull ? FULL_NAME : LITE_NAME)
                     : `HelixSR ${active.version}`}
                   {ngxActive && installed === "ffx" ? " (as DLSS)" : ""}
                 </ButtonItem>
@@ -1678,7 +1681,7 @@ function OptiItem({
             {hlxRelease && !official && !o.disabled && (hlxDlss || ownInstalled || (fullInstalled && !differs)) && (
               <PanelSectionRow>
                 <ButtonItem layout="below" disabled={busy || !!guard.install} onClick={() => run(() => installOptiscaler(o.dir, true))}>
-                  Use HLX FSR 4 {active.version} instead
+                  Use {LITE_NAME} {active.version} instead
                 </ButtonItem>
               </PanelSectionRow>
             )}
@@ -1747,9 +1750,9 @@ function OptiItem({
             {installed === "ngx"
               ? "To compare live: OptiScaler's menu shows DLSS as the upscaler (that's HelixSR); switch to FSR there and back."
               : fullInstalled
-              ? "To compare live: in OptiScaler's menu, switch Upscalers → FFX Upscaler to XeSS and back."
+              ? 'To compare live: in OptiScaler\'s menu, Upscalers → FFX Upscaler lists HLX FSR 4 Full as "FSR 4.1.2" (its own name); switch to XeSS there and back.'
               : o.upscaler
-              ? "To compare live: in OptiScaler's menu, Upscalers → FFX Upscaler lists HLX FSR 4 first and AMD's FSR versions after it; switch there and back."
+              ? 'To compare live: in OptiScaler\'s menu, Upscalers → FFX Upscaler lists HLX FSR 4 Lite first (as "HLX FSR 4") and AMD\'s FSR versions after it; switch there and back.'
               : 'To compare live: in OptiScaler\'s menu, Upscalers → FFX Upscaler reads "FSR HelixSR (3.1.5)" when HelixSR is used; switch to XeSS or FSR 4 there and back. A red frame around the picture means HelixSR has no network (build it again).'}
           </Note>
           {details && (
@@ -1878,17 +1881,17 @@ function gameStatus(game: GameDetail, active: Active): { color: string; title: s
   const fresh = freshness(i.check, game.session);
   const u = i.check.last_upscale;
   if (i.check.status === "error" && i.upscaler === FULL_NAME) {
-    return { color: RED, title: `Installed, but ${FULL_NAME} can't upscale`, detail: `Its log says why (Show technical details). "Use HLX FSR 4 instead" below switches to HLX FSR 4, which runs on more GPUs.`, extra };
+    return { color: RED, title: `Installed, but ${FULL_NAME} can't upscale`, detail: `Its log says why (Show technical details). "Use HLX FSR 4 Lite instead" below switches to HLX FSR 4 Lite, which runs on more GPUs.`, extra };
   }
   if (i.check.status === "error" && i.upscaler) {
-    // HLX FSR 4 doesn't show a red frame: AMD's own FSR runs instead, and its log says why
-    return { color: RED, title: "Installed, but HLX FSR 4 can't upscale", detail: `AMD's own FSR runs instead. Its log says why (Show technical details); if it says the shaders aren't built, build HelixSR above and install it here again.`, extra };
+    // HLX FSR 4 (Lite) doesn't show a red frame: AMD's own FSR runs instead, and its log says why
+    return { color: RED, title: `Installed, but ${LITE_NAME} can't upscale`, detail: `AMD's own FSR runs instead. Its log says why (Show technical details); if it says the shaders aren't built, build HelixSR above and install it here again.`, extra };
   }
   if (i.check.status === "error") {
     return { color: RED, title: "Installed, but HelixSR can't upscale", detail: `${v} here has no built network (red frame in the game). Build HelixSR above, then install it here again.`, extra };
   }
   if (i.check.status === "fallback" && fresh !== "stale") {
-    return { color: YELLOW, title: "Installed, AMD's FSR stepped in", detail: `${i.upscaler ?? "HLX FSR 4"} handed some upscaling to AMD's own FSR (a request it doesn't cover). Its log lines are under "Show technical details".`, extra };
+    return { color: YELLOW, title: "Installed, AMD's FSR stepped in", detail: `${shown(i.upscaler) ?? LITE_NAME} handed some upscaling to AMD's own FSR (a request it doesn't cover). Its log lines are under "Show technical details".`, extra };
   }
   if (i.check.status === "running" && fresh !== "stale") {
     const when = fresh === "current" ? "in the current game session" : fresh === "last" ? "in the last game session" : "";
