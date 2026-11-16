@@ -167,8 +167,10 @@ your account banned and only installs after you turn on **I understand the risk*
   takes it out again on removal. In the game, select DLSS (or FSR / XeSS if it has no DLSS). Scaler's menu (Insert)
   switches between HLX DLSS, HLX FSR 4 Lite, HLX FSR 4 Full and AMD's FSR; the status reads the log of whichever ran.
   **Remove HelixSR Scaler** puts the game's own files back. A Scaler installed with HelixSR Desktop is managed the same
-  way. HelixSR's frame generation isn't included (the plugin builds HelixSR without it). New in 0.13.0 and not yet
-  tested on a Steam Deck.
+  way. HelixSR's frame generation isn't included (the plugin builds HelixSR without it). Tested on a Steam Deck OLED
+  with System Shock (2023, HelixSR 3.4.0): the game offers DLSS, and HLX DLSS runs (with the Deck's fast 8-bit math).
+  HLX DLSS needs the release's DLSS network: from 3.2.0 a release is ready without the setup (HLX FSR 4 Lite comes
+  built), so HelixSR Installation offers **Build … DLSS network (for HelixSR Scaler)** for it.
 - **Game that ships FSR 3.1 itself (HelixSR 1.4, 1.7 or later):** in **In place of the game's FSR 3.1** press **Install
   HelixSR … here**, then select AMD FSR as the upscaler in the game's settings. This needs no OptiScaler. A game that
   offers both sections works either way (HelixSR 1.8's own setup prefers this one). With 3.x this installs HLX FSR 4;

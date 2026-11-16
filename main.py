@@ -1504,7 +1504,9 @@ def scaler_check(opti_dir):
                     (o / "OptiScaler", HLX_NAME)):
         checks.append({**helix_log_check(d), "upscaler": name})
     found = [c for c in checks if c["exists"]]
-    return max(found, key=lambda c: c.get("mtime") or 0) if found else checks[0]
+    # Scaler loads HLX FSR 4 Lite at every start to list it ("loaded" in its log): a log of an upscaler that actually
+    # ran (or failed) comes first, then the newest
+    return max(found, key=lambda c: (c["status"] != "loaded", c.get("mtime") or 0)) if found else checks[0]
 
 
 def helix_log_check(folder):

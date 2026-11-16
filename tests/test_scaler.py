@@ -155,6 +155,19 @@ class ScalerCheckTest(FakeHomeTest):
         c = main.scaler_check(o)
         self.assertEqual((c["status"], c["upscaler"]), ("running", "HLX FSR 4 Full"))
 
+    def test_lite_only_loaded_by_scaler_doesnt_hide_hlx_dlss_running(self):
+        # seen on the Deck: Scaler loads HLX FSR 4 Lite to list it, after HLX DLSS started upscaling
+        o = HOME / "g/bin"
+        write(o / "HelixSR/helixsr.log", "model-e: network running (nchw8, 19 launches per frame)\n")
+        from test_hlx_fsr4 import fake_hlx
+        import os, time
+        fake_hlx(o / "OptiScaler/amd_fidelityfx_upscaler_dx12.dll", built=True)
+        lite = write(o / "OptiScaler" / main.HLX_LOG, "[I] HLX-FSR-4 loaded (build Nov 15 2026 19:28:31)\n")
+        later = time.time() + 5
+        os.utime(lite, (later, later))
+        c = main.scaler_check(o)
+        self.assertEqual((c["status"], c["upscaler"]), ("running", "HLX DLSS"))
+
     def test_no_log_yet(self):
         c = main.scaler_check(HOME / "g/bin")
         self.assertEqual((c["exists"], c["status"]), (False, "none"))
