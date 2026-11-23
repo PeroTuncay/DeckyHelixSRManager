@@ -968,6 +968,15 @@ def inside_library(p):
     return any(rp.startswith(r + os.sep) for r in game_roots())
 
 
+def game_folder_ok(p):
+    """A folder HelixSR Scaler may be installed into: one inside a Steam library's common folder or inside a listed
+    game's folder, or a listed game's own folder (other stores' games have no library around them)."""
+    rp = os.path.realpath(p)
+    steam = game_roots_steam()
+    return any(rp.startswith(r + os.sep) or (rp == r and r not in steam and safe_game_folder(rp))
+               for r in game_roots())
+
+
 # Upscalers a game ships that OptiScaler can take as input: such a game (without FSR 3.1) gets HelixSR once OptiScaler
 # is in it (e.g. from Decky Framegen), so the list shows it with that hint instead of hiding it.
 INPUT_DLLS = {"nvngx_dlss.dll": "DLSS", "libxess.dll": "XeSS", "ffx_fsr2_api_dx12_x64.dll": "FSR 2",
@@ -3279,16 +3288,16 @@ class Plugin:
     async def install_scaler(self, path):
         """path: the game's folder (HelixSR's bridge finds the .exe folder in it)."""
         def work():
-            if not inside_library(Path(path)):
-                raise RuntimeError("Not a game folder inside a Steam library.")
+            if not game_folder_ok(path):
+                raise RuntimeError("Not a game folder the plugin lists.")
             self._guard(path, True)
             return install_scaler(Path(path))
         return await self._do(work)
 
     async def uninstall_scaler(self, path):
         def work():
-            if not inside_library(Path(path)):
-                raise RuntimeError("Not a game folder inside a Steam library.")
+            if not game_folder_ok(path):
+                raise RuntimeError("Not a game folder the plugin lists.")
             self._guard(path, False)
             return uninstall_scaler(Path(path))
         return await self._do(work)
