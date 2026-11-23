@@ -4,7 +4,7 @@ it was called and installs / removes stand-in Scaler files, answering in JSON li
 import asyncio
 import json
 
-from support import HOME, FakeHomeTest, main, write
+from support import HOME, FakeHomeTest, enable_stores, game, main, write
 from test_helixsr_releases import fake_dll
 from test_hlx_fsr4 import release
 
@@ -137,6 +137,40 @@ class ScalerTest(FakeHomeTest):
         write(self.game / "bin/HelixSR-Scaler-backup/amd_fidelityfx_upscaler_dx12.dll", b"MZ game")
         dlls, opti = main.scan_folder(self.game)
         self.assertEqual((dlls, opti), ([], [self.game / "bin"]))
+
+
+class OtherStoreTest(FakeHomeTest):
+    """Seen in an issue: Unifideck's RDR2 (Epic) was refused with "not a game folder inside a steam library" because
+    the Scaler takes the game's own folder, and another store's game has no library around it."""
+
+    def setUp(self):
+        super().setUp()
+        self.rel = scaler_release()
+        main.save_settings({"helix_dir": str(HOME / "HelixSR"), "active": "v3.0.0"})
+        self.ctl = game(HOME / "Games/Control", "Control.exe")
+        write(HOME / ".config/legendary/installed.json",
+              json.dumps({"c": {"install_path": str(self.ctl), "title": "Control"}}))
+
+    def test_a_listed_games_own_folder_takes_the_scaler(self):
+        enable_stores("legendary")
+        self.assertTrue(main.game_folder_ok(self.ctl))
+        r = asyncio.run(main.Plugin().install_scaler(str(self.ctl)))
+        self.assertTrue(r["ok"], r)
+        self.assertEqual(calls(self.rel)[0][:3], ["install", "--game", str(self.ctl)])
+        r = asyncio.run(main.Plugin().uninstall_scaler(str(self.ctl)))
+        self.assertTrue(r["ok"], r)
+
+    def test_other_folders_are_still_refused(self):
+        self.assertFalse(main.game_folder_ok(self.ctl))   # the store is off: not listed
+        enable_stores("legendary")
+        common = HOME / ".local/share/Steam/steamapps/common"
+        write(common / "Game/game.exe", b"MZ")
+        self.assertTrue(main.game_folder_ok(common / "Game"))
+        for p in (self.ctl.parent, HOME, self.ctl.parent / "Other", common):
+            self.assertFalse(main.game_folder_ok(p), p)
+        r = asyncio.run(main.Plugin().install_scaler(str(self.ctl.parent)))
+        self.assertIn("Not a game folder", r["error"])
+        self.assertEqual(calls(self.rel), [])
 
 
 class ScalerCheckTest(FakeHomeTest):
